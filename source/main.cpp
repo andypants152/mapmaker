@@ -6,6 +6,21 @@
 #include <map>
 #include <utility>
 #include <vector>
+#include <unistd.h>
+#include <cstdio>
+
+#ifdef __cplusplus
+extern "C" {
+    void userAppInit(void);
+    void userAppExit(void);
+}
+#endif
+
+static int g_nxlinkSock = -1;
+static inline void initNxLink() { userAppInit(); }
+
+#ifdef __cplusplus
+#endif
 
 #include "RendererGL.h"
 #include "EditorState.h"
@@ -75,6 +90,105 @@ static bool loopsEqual(const std::vector<int>& a, const std::vector<int>& b) {
     return false;
 }
 
+static void buildDefaultMap(EditorState& state) {
+    if (!state.vertices.empty() || !state.lines.empty())
+        return;
+
+    state.vertices.push_back({0.0f, 0.0f});
+    state.vertices.push_back({8.0f, 0.0f});
+    state.vertices.push_back({8.0f, 6.0f});
+    state.vertices.push_back({0.0f, 6.0f});
+
+    state.lines.push_back({0, 1});
+    state.lines.push_back({1, 2});
+    state.lines.push_back({2, 3});
+    state.lines.push_back({3, 0});
+}
+
+static void rebuildWorldMesh(const EditorState& state, Mesh3D& mesh,
+                             float floorHeight = 0.0f, float ceilingHeight = 3.0f) {
+    mesh.vertices.clear();
+    mesh.normals.clear();
+    mesh.colors.clear();
+    mesh.indices.clear();
+
+    uint16_t baseIndex = 0;
+
+    auto addVertex = [&](float x, float y, float z, float nx, float ny, float nz, float r, float g, float b) -> uint16_t {
+        mesh.vertices.push_back(x);
+        mesh.vertices.push_back(y);
+        mesh.vertices.push_back(z);
+        mesh.normals.push_back(nx);
+        mesh.normals.push_back(ny);
+        mesh.normals.push_back(nz);
+        mesh.colors.push_back(r);
+        mesh.colors.push_back(g);
+        mesh.colors.push_back(b);
+        return baseIndex++;
+    };
+
+    for (const auto& sector : state.sectors) {
+        if (sector.vertices.size() < 3)
+            continue;
+
+        std::vector<uint16_t> fanFloor;
+        std::vector<uint16_t> fanCeil;
+        for (int idx : sector.vertices) {
+            if (idx < 0 || idx >= static_cast<int>(state.vertices.size()))
+                continue;
+            const auto& v = state.vertices[idx];
+            fanFloor.push_back(addVertex(v.first, v.second, floorHeight, 0.0f, 0.0f, 1.0f, 0.5f, 0.35f, 0.2f));
+            fanCeil.push_back(addVertex(v.first, v.second, ceilingHeight, 0.0f, 0.0f, -1.0f, 0.65f, 0.65f, 0.7f));
+        }
+
+        for (size_t i = 1; i + 1 < fanFloor.size(); ++i) {
+            mesh.indices.push_back(fanFloor[0]);
+            mesh.indices.push_back(fanFloor[i]);
+            mesh.indices.push_back(fanFloor[i + 1]);
+        }
+
+        for (size_t i = 1; i + 1 < fanCeil.size(); ++i) {
+            mesh.indices.push_back(fanCeil[0]);
+            mesh.indices.push_back(fanCeil[i + 1]);
+            mesh.indices.push_back(fanCeil[i]);
+        }
+
+        for (size_t i = 0; i < sector.vertices.size(); ++i) {
+            int idxA = sector.vertices[i];
+            int idxB = sector.vertices[(i + 1) % sector.vertices.size()];
+            if (idxA < 0 || idxA >= static_cast<int>(state.vertices.size()) ||
+                idxB < 0 || idxB >= static_cast<int>(state.vertices.size()))
+                continue;
+            const auto& vA = state.vertices[idxA];
+            const auto& vB = state.vertices[idxB];
+            float edgeX = vB.first - vA.first;
+            float edgeY = vB.second - vA.second;
+            float len = std::sqrt(edgeX * edgeX + edgeY * edgeY);
+            float nx = 0.0f;
+            float ny = 0.0f;
+            if (len > 0.0001f) {
+                nx = edgeY / len;
+                ny = -edgeX / len;
+            }
+
+            uint16_t a0 = addVertex(vA.first, vA.second, floorHeight, nx, ny, 0.0f, 0.6f, 0.6f, 0.6f);
+            uint16_t b0 = addVertex(vB.first, vB.second, floorHeight, nx, ny, 0.0f, 0.6f, 0.6f, 0.6f);
+            uint16_t b1 = addVertex(vB.first, vB.second, ceilingHeight, nx, ny, 0.0f, 0.6f, 0.6f, 0.6f);
+            uint16_t a1 = addVertex(vA.first, vA.second, ceilingHeight, nx, ny, 0.0f, 0.6f, 0.6f, 0.6f);
+
+            mesh.indices.push_back(a0);
+            mesh.indices.push_back(b0);
+            mesh.indices.push_back(b1);
+            mesh.indices.push_back(a0);
+            mesh.indices.push_back(b1);
+            mesh.indices.push_back(a1);
+        }
+    }
+
+    std::printf("world mesh: %zu verts, %zu tris\n",
+                mesh.vertices.size() / 3,
+                mesh.indices.size() / 3);
+}
 static void rebuildSectors(EditorState& state) {
     state.sectors.clear();
     if (state.vertices.size() < 3 || state.lines.size() < 3)
@@ -189,11 +303,26 @@ static void rebuildSectors(EditorState& state) {
     }
 }
 
+extern "C" {
+
+void userAppInit(void) {
+    nxlinkStdio();
+    socketInitializeDefault();
+    setvbuf(stdout, NULL, _IONBF, 0);
+    printf("userAppInit(): nxlink ready\n");
+}
+
+void userAppExit(void) {
+    socketExit();
+}
+
+}
+
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 
-    // Initialize NxLink / debug print if you want to see logs in nxlink
+    initNxLink();
     consoleDebugInit(debugDevice_SVC);
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
@@ -251,8 +380,8 @@ int main(int argc, char** argv) {
 
     Camera2D camera;
     camera.zoom = 32.0f;
-    camera.offsetX = 0.0f;
-    camera.offsetY = 0.0f;
+    camera.offsetX = 4.0f;
+    camera.offsetY = 3.0f;
 
     SDL_GameController* controller = nullptr;
     for (int i = 0; i < SDL_NumJoysticks(); ++i) {
@@ -265,6 +394,14 @@ int main(int argc, char** argv) {
     }
 
     EditorState state;
+    buildDefaultMap(state);
+    state.cursorRawX = 4.0f;
+    state.cursorRawY = 3.0f;
+    state.cursorX    = 4.0f;
+    state.cursorY    = 3.0f;
+    rebuildSectors(state);
+    rebuildWorldMesh(state, state.worldMesh);
+    Camera3D fpsCamera;
 
     bool running = true;
     uint32_t lastTicks = SDL_GetTicks();
@@ -278,6 +415,7 @@ int main(int argc, char** argv) {
         bool selectPressed = false; // logical "A" action (wall mode)
         bool placePressed = false;  // logical "B" action (place vertex)
         bool deletePressed = false;
+        bool togglePlayPressed = false;
         bool needRebuild = false;
 
         SDL_Event ev;
@@ -305,11 +443,27 @@ int main(int argc, char** argv) {
                     if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_X) {
                         deletePressed = true;
                     }
+                    if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
+                        togglePlayPressed = true;
+                    }
                     break;
             }
         }
 
-        if (controller) {
+        if (togglePlayPressed) {
+            state.playMode = !state.playMode;
+            state.wallMode = false;
+            state.selectedVertex = -1;
+            state.hoveredVertex = -1;
+            if (state.playMode) {
+                fpsCamera = Camera3D{};
+                fpsCamera.x = 4.0f;
+                fpsCamera.y = 3.0f;
+                fpsCamera.z = 1.7f;
+            }
+        }
+
+        if (!state.playMode && controller) {
             const int16_t deadZone = 8000;
             const float invMax = 1.0f / 32767.0f;
             const float panSpeed = 8.0f; // world units per second
@@ -360,22 +514,58 @@ int main(int argc, char** argv) {
 
             state.cursorRawX = newCursorRawX;
             state.cursorRawY = newCursorRawY;
+        } else if (state.playMode && controller) {
+            const int16_t deadZone = 8000;
+            const float invMax = 1.0f / 32767.0f;
+
+            int16_t moveXRaw = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX);
+            int16_t moveYRaw = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY);
+            int16_t lookXRaw = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTX);
+            int16_t lookYRaw = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTY);
+
+            float moveX = (std::abs(moveXRaw) > deadZone) ? moveXRaw * invMax : 0.0f;
+            float moveY = (std::abs(moveYRaw) > deadZone) ? moveYRaw * invMax : 0.0f;
+            float lookX = (std::abs(lookXRaw) > deadZone) ? lookXRaw * invMax : 0.0f;
+            float lookY = (std::abs(lookYRaw) > deadZone) ? lookYRaw * invMax : 0.0f;
+
+            const float moveSpeed = 5.0f;
+            const float lookSpeed = 2.5f;
+
+            fpsCamera.yaw += lookX * lookSpeed * dt;
+            fpsCamera.pitch -= lookY * lookSpeed * dt;
+            if (fpsCamera.pitch > 1.2f) fpsCamera.pitch = 1.2f;
+            if (fpsCamera.pitch < -1.2f) fpsCamera.pitch = -1.2f;
+
+            const float forwardX = std::sin(fpsCamera.yaw);
+            const float forwardY = std::cos(fpsCamera.yaw);
+            const float rightX = std::cos(fpsCamera.yaw);
+            const float rightY = -std::sin(fpsCamera.yaw);
+
+            float moveForward = -moveY;
+            float moveStrafe = moveX;
+
+            fpsCamera.x += (forwardX * moveForward + rightX * moveStrafe) * moveSpeed * dt;
+            fpsCamera.y += (forwardY * moveForward + rightY * moveStrafe) * moveSpeed * dt;
         }
 
-        state.hoveredVertex = -1;
-        const float hoverRadius = 0.4f;
-        float bestDist2 = hoverRadius * hoverRadius;
-        for (size_t i = 0; i < state.vertices.size(); ++i) {
-            float dx = state.cursorX - state.vertices[i].first;
-            float dy = state.cursorY - state.vertices[i].second;
-            float dist2 = dx * dx + dy * dy;
-            if (dist2 <= bestDist2) {
-                bestDist2 = dist2;
-                state.hoveredVertex = static_cast<int>(i);
+        if (!state.playMode) {
+            state.hoveredVertex = -1;
+            const float hoverRadius = 0.4f;
+            float bestDist2 = hoverRadius * hoverRadius;
+            for (size_t i = 0; i < state.vertices.size(); ++i) {
+                float dx = state.cursorX - state.vertices[i].first;
+                float dy = state.cursorY - state.vertices[i].second;
+                float dist2 = dx * dx + dy * dy;
+                if (dist2 <= bestDist2) {
+                    bestDist2 = dist2;
+                    state.hoveredVertex = static_cast<int>(i);
+                }
             }
+        } else {
+            state.hoveredVertex = -1;
         }
 
-        if (deletePressed) {
+        if (!state.playMode && deletePressed) {
             int deleteVertex = findVertexAt(state, state.cursorX, state.cursorY);
             if (deleteVertex != -1) {
                 state.vertices.erase(state.vertices.begin() + deleteVertex);
@@ -413,7 +603,7 @@ int main(int argc, char** argv) {
         }
 
         int placedVertexIndex = -1;
-        if (placePressed) {
+        if (!state.playMode && placePressed) {
             placedVertexIndex = findVertexAt(state, state.cursorX, state.cursorY);
             if (placedVertexIndex == -1) {
                 state.vertices.emplace_back(state.cursorX, state.cursorY);
@@ -432,7 +622,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (selectPressed) {
+        if (!state.playMode && selectPressed) {
             if (state.hoveredVertex != -1) {
                 if (!state.wallMode) {
                     state.wallMode = true;
@@ -451,63 +641,69 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (needRebuild) {
-            rebuildSectors(state);
-            needRebuild = false;
-        }
-
-        renderer.beginFrame();
-        renderer.drawGrid(camera, 1.0f);    // 1 unit = 1 grid cell
-
-        for (const auto& sector : state.sectors) {
-            renderer.drawSectorFill(sector, state, 0.2f, 0.4f, 0.9f, 0.25f);
-        }
-
-        for (const auto& line : state.lines) {
-            if (line.v1 < 0 || line.v2 < 0 ||
-                line.v1 >= static_cast<int>(state.vertices.size()) ||
-                line.v2 >= static_cast<int>(state.vertices.size())) {
-                continue;
+        if (!state.playMode) {
+            if (needRebuild) {
+                rebuildSectors(state);
+                rebuildWorldMesh(state, state.worldMesh);
+                needRebuild = false;
             }
-            const auto& v1 = state.vertices[line.v1];
-            const auto& v2 = state.vertices[line.v2];
-            renderer.drawLine2D(v1.first, v1.second, v2.first, v2.second, 1.0f, 1.0f, 1.0f);
-        }
 
-        for (const auto& vert : state.vertices) {
-            renderer.drawPoint2D(vert.first, vert.second, 0.12f, 0.0f, 1.0f, 1.0f);
-        }
+            renderer.beginFrame();
+            renderer.drawGrid(camera, 1.0f);    // 1 unit = 1 grid cell
 
-        if (state.hoveredVertex >= 0 && state.hoveredVertex < static_cast<int>(state.vertices.size())) {
-            const auto& hv = state.vertices[state.hoveredVertex];
-            renderer.drawPoint2D(hv.first, hv.second, 0.16f, 1.0f, 1.0f, 0.0f);
-        }
+            for (const auto& sector : state.sectors) {
+                renderer.drawSectorFill(sector, state, 0.2f, 0.4f, 0.9f, 0.25f);
+            }
 
-        if (state.wallMode && state.selectedVertex >= 0 &&
-            state.selectedVertex < static_cast<int>(state.vertices.size())) {
-            const auto& sv = state.vertices[state.selectedVertex];
-            renderer.drawPoint2D(sv.first, sv.second, 0.2f, 1.0f, 0.5f, 0.0f);
-        }
+            for (const auto& line : state.lines) {
+                if (line.v1 < 0 || line.v2 < 0 ||
+                    line.v1 >= static_cast<int>(state.vertices.size()) ||
+                    line.v2 >= static_cast<int>(state.vertices.size())) {
+                    continue;
+                }
+                const auto& v1 = state.vertices[line.v1];
+                const auto& v2 = state.vertices[line.v2];
+                renderer.drawLine2D(v1.first, v1.second, v2.first, v2.second, 1.0f, 1.0f, 1.0f);
+            }
 
-        if (state.wallMode &&
-            state.selectedVertex >= 0 &&
-            state.hoveredVertex >= 0 &&
-            state.selectedVertex < static_cast<int>(state.vertices.size()) &&
-            state.hoveredVertex < static_cast<int>(state.vertices.size()) &&
-            state.selectedVertex != state.hoveredVertex) {
-            const auto& sv = state.vertices[state.selectedVertex];
-            const auto& hv = state.vertices[state.hoveredVertex];
-            renderer.drawLine2D(sv.first, sv.second, hv.first, hv.second, 1.0f, 1.0f, 0.0f);
-        }
+            for (const auto& vert : state.vertices) {
+                renderer.drawPoint2D(vert.first, vert.second, 0.12f, 0.0f, 1.0f, 1.0f);
+            }
 
-        const float cursorSize = 0.2f;
-        renderer.drawLine2D(state.cursorX - cursorSize, state.cursorY,
-                            state.cursorX + cursorSize, state.cursorY,
-                            0.1f, 0.4f, 1.0f);
-        renderer.drawLine2D(state.cursorX, state.cursorY - cursorSize,
-                            state.cursorX, state.cursorY + cursorSize,
-                            0.1f, 0.4f, 1.0f);
-        renderer.endFrame(window);
+            if (state.hoveredVertex >= 0 && state.hoveredVertex < static_cast<int>(state.vertices.size())) {
+                const auto& hv = state.vertices[state.hoveredVertex];
+                renderer.drawPoint2D(hv.first, hv.second, 0.16f, 1.0f, 1.0f, 0.0f);
+            }
+
+            if (state.wallMode && state.selectedVertex >= 0 &&
+                state.selectedVertex < static_cast<int>(state.vertices.size())) {
+                const auto& sv = state.vertices[state.selectedVertex];
+                renderer.drawPoint2D(sv.first, sv.second, 0.2f, 1.0f, 0.5f, 0.0f);
+            }
+
+            if (state.wallMode &&
+                state.selectedVertex >= 0 &&
+                state.hoveredVertex >= 0 &&
+                state.selectedVertex < static_cast<int>(state.vertices.size()) &&
+                state.hoveredVertex < static_cast<int>(state.vertices.size()) &&
+                state.selectedVertex != state.hoveredVertex) {
+                const auto& sv = state.vertices[state.selectedVertex];
+                const auto& hv = state.vertices[state.hoveredVertex];
+                renderer.drawLine2D(sv.first, sv.second, hv.first, hv.second, 1.0f, 1.0f, 0.0f);
+            }
+
+            const float cursorSize = 0.2f;
+            renderer.drawLine2D(state.cursorX - cursorSize, state.cursorY,
+                                state.cursorX + cursorSize, state.cursorY,
+                                0.1f, 0.4f, 1.0f);
+            renderer.drawLine2D(state.cursorX, state.cursorY - cursorSize,
+                                state.cursorX, state.cursorY + cursorSize,
+                                0.1f, 0.4f, 1.0f);
+            renderer.endFrame(window);
+        } else {
+            renderer.drawMesh3D(state.worldMesh, fpsCamera);
+            renderer.endFrame(window);
+        }
     }
 
     if (controller) {
@@ -517,6 +713,11 @@ int main(int argc, char** argv) {
     SDL_GL_DeleteContext(glCtx);
     SDL_DestroyWindow(window);
     SDL_Quit();
+    if (g_nxlinkSock >= 0) {
+        close(g_nxlinkSock);
+        socketExit();
+        g_nxlinkSock = -1;
+    }
     consoleExit(NULL);
     return 0;
 }

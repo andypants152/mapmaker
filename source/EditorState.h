@@ -3,6 +3,7 @@
 
 #include <utility>
 #include <vector>
+#include "Mesh3D.h"
 
 struct LineDef {
     int v1 = -1;
@@ -11,6 +12,14 @@ struct LineDef {
 
 struct Sector {
     std::vector<int> vertices;
+};
+
+struct Camera3D {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 1.7f;
+    float yaw = 0.0f;
+    float pitch = 0.0f;
 };
 
 struct EditorState {
@@ -23,7 +32,9 @@ struct EditorState {
     std::vector<std::pair<float, float>> vertices;
     std::vector<LineDef> lines;
     std::vector<Sector> sectors;
+    Mesh3D worldMesh;
     int hoveredVertex = -1;
     int selectedVertex = -1;
     bool wallMode = false;
+    bool playMode = false;
 };

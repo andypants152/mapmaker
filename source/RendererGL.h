@@ -6,6 +6,8 @@
 
 struct Sector;
 struct EditorState;
+struct Camera3D;
+struct Mesh3D;
 
 struct Camera2D {
     float zoom = 1.0f;
@@ -25,6 +27,7 @@ public:
     void drawPoint2D(float x, float y, float size, float r, float g, float b);
     void drawSectorFill(const Sector& sector, const EditorState& state,
                         float r, float g, float b, float a);
+    void drawMesh3D(const Mesh3D& mesh, const Camera3D& cam);
     void drawGrid(const Camera2D& cam, float gridSize);
     void endFrame(SDL_Window* window);
 
@@ -38,6 +41,8 @@ private:
 
     float worldToClipX(float worldX) const;
     float worldToClipY(float worldY) const;
+    bool projectPoint3D(const Camera3D& cam, float x, float y, float z,
+                        float& outX, float& outY) const;
 
     int m_width;
     int m_height;
@@ -48,5 +53,13 @@ private:
     GLint  m_attrPos;
     GLint  m_uniformColor;
 
+    GLuint m_program3D;
+    GLint  m_attrPos3D;
+    GLint  m_attrColor3D;
+    GLint  m_uniformMVP;
+
     GLuint m_vbo;
+    GLuint m_vbo3DPos;
+    GLuint m_vbo3DColor;
+    GLuint m_ibo3D;
 };
