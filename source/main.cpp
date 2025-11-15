@@ -8,6 +8,11 @@
 
 #include "RendererGL.h"
 
+struct LineDef {
+    int v1 = -1;
+    int v2 = -1;
+};
+
 struct EditorState {
     float cursorX = 0.0f;
     float cursorY = 0.0f;
@@ -16,7 +21,56 @@ struct EditorState {
     bool snapEnabled = true;
     float snapSize = 1.0f;
     std::vector<std::pair<float, float>> vertices;
+    std::vector<LineDef> lines;
+    int hoveredVertex = -1;
+    int selectedVertex = -1;
+    bool wallMode = false;
 };
+
+static int findVertexAt(const EditorState& state, float x, float y, float eps = 0.0001f) {
+    for (size_t i = 0; i < state.vertices.size(); ++i) {
+        if (std::fabs(state.vertices[i].first - x) < eps &&
+            std::fabs(state.vertices[i].second - y) < eps) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+static int findLineAt(const EditorState& state, float x, float y, float eps = 0.0001f) {
+    for (size_t i = 0; i < state.lines.size(); ++i) {
+        const LineDef& line = state.lines[i];
+        if (line.v1 < 0 || line.v2 < 0 ||
+            line.v1 >= static_cast<int>(state.vertices.size()) ||
+            line.v2 >= static_cast<int>(state.vertices.size())) {
+            continue;
+        }
+        const auto& v1 = state.vertices[line.v1];
+        const auto& v2 = state.vertices[line.v2];
+
+        float dx = v2.first - v1.first;
+        float dy = v2.second - v1.second;
+        float px = x - v1.first;
+        float py = y - v1.second;
+
+        float cross = dx * py - dy * px;
+        if (std::fabs(cross) > eps)
+            continue;
+
+        float minX = std::min(v1.first, v2.first) - eps;
+        float maxX = std::max(v1.first, v2.first) + eps;
+        float minY = std::min(v1.second, v2.second) - eps;
+        float maxY = std::max(v1.second, v2.second) + eps;
+
+        if (x < minX || x > maxX)
+            continue;
+        if (y < minY || y > maxY)
+            continue;
+
+        return static_cast<int>(i);
+    }
+    return -1;
+}
 
 int main(int argc, char** argv) {
     (void)argc;
@@ -104,6 +158,10 @@ int main(int argc, char** argv) {
         float dt = (now - lastTicks) / 1000.0f;
         lastTicks = now;
 
+        bool selectPressed = false; // logical "A" action (wall mode)
+        bool placePressed = false;  // logical "B" action (place vertex)
+        bool deletePressed = false;
+
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             switch (ev.type) {
@@ -120,19 +178,14 @@ int main(int argc, char** argv) {
                     if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_START) {
                         running = false;
                     }
+                    if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_B) {
+                        selectPressed = true;
+                    }
                     if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_A) {
-                        const float eps = 0.0001f;
-                        bool exists = false;
-                        for (const auto& v : state.vertices) {
-                            if (std::fabs(v.first - state.cursorX) < eps &&
-                                std::fabs(v.second - state.cursorY) < eps) {
-                                exists = true;
-                                break;
-                            }
-                        }
-                        if (!exists) {
-                            state.vertices.emplace_back(state.cursorX, state.cursorY);
-                        }
+                        placePressed = true;
+                    }
+                    if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_X) {
+                        deletePressed = true;
                     }
                     break;
             }
@@ -143,14 +196,14 @@ int main(int argc, char** argv) {
             const float invMax = 1.0f / 32767.0f;
             const float panSpeed = 8.0f; // world units per second
 
-            int16_t rawX = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX);
-            int16_t rawY = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY);
+            int16_t camRawX = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTX);
+            int16_t camRawY = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTY);
 
-            float axisX = (std::abs(rawX) > deadZone) ? rawX * invMax : 0.0f;
-            float axisY = (std::abs(rawY) > deadZone) ? rawY * invMax : 0.0f;
+            float camAxisX = (std::abs(camRawX) > deadZone) ? camRawX * invMax : 0.0f;
+            float camAxisY = (std::abs(camRawY) > deadZone) ? camRawY * invMax : 0.0f;
 
-            camera.offsetX -= axisX * panSpeed * dt;
-            camera.offsetY -= axisY * panSpeed * dt;
+            camera.offsetX += camAxisX * panSpeed * dt;
+            camera.offsetY -= camAxisY * panSpeed * dt;
 
             float zoomInput = 0.0f;
             if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) {
@@ -167,8 +220,8 @@ int main(int argc, char** argv) {
                 if (camera.zoom > 32.0f) camera.zoom = 32.0f;
             }
 
-            int16_t rawCursorX = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTX);
-            int16_t rawCursorY = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTY);
+            int16_t rawCursorX = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX);
+            int16_t rawCursorY = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY);
 
             float axisCursorX = (std::abs(rawCursorX) > deadZone) ? rawCursorX * invMax : 0.0f;
             float axisCursorY = (std::abs(rawCursorY) > deadZone) ? rawCursorY * invMax : 0.0f;
@@ -191,12 +244,137 @@ int main(int argc, char** argv) {
             state.cursorRawY = newCursorRawY;
         }
 
+        state.hoveredVertex = -1;
+        const float hoverRadius = 0.4f;
+        float bestDist2 = hoverRadius * hoverRadius;
+        for (size_t i = 0; i < state.vertices.size(); ++i) {
+            float dx = state.cursorX - state.vertices[i].first;
+            float dy = state.cursorY - state.vertices[i].second;
+            float dist2 = dx * dx + dy * dy;
+            if (dist2 <= bestDist2) {
+                bestDist2 = dist2;
+                state.hoveredVertex = static_cast<int>(i);
+            }
+        }
+
+        if (deletePressed) {
+            int deleteVertex = findVertexAt(state, state.cursorX, state.cursorY);
+            if (deleteVertex != -1) {
+                state.vertices.erase(state.vertices.begin() + deleteVertex);
+
+                for (auto it = state.lines.begin(); it != state.lines.end();) {
+                    if (it->v1 == deleteVertex || it->v2 == deleteVertex) {
+                        it = state.lines.erase(it);
+                        continue;
+                    }
+                    if (it->v1 > deleteVertex) --(it->v1);
+                    if (it->v2 > deleteVertex) --(it->v2);
+                    ++it;
+                }
+
+                if (state.selectedVertex == deleteVertex) {
+                    state.selectedVertex = -1;
+                    state.wallMode = false;
+                } else if (state.selectedVertex > deleteVertex) {
+                    --state.selectedVertex;
+                }
+
+                if (state.hoveredVertex == deleteVertex) {
+                    state.hoveredVertex = -1;
+                } else if (state.hoveredVertex > deleteVertex) {
+                    --state.hoveredVertex;
+                }
+            } else {
+                int deleteLine = findLineAt(state, state.cursorX, state.cursorY);
+                if (deleteLine != -1) {
+                    state.lines.erase(state.lines.begin() + deleteLine);
+                }
+            }
+        }
+
+        int placedVertexIndex = -1;
+        if (placePressed) {
+            placedVertexIndex = findVertexAt(state, state.cursorX, state.cursorY);
+            if (placedVertexIndex == -1) {
+                state.vertices.emplace_back(state.cursorX, state.cursorY);
+                placedVertexIndex = static_cast<int>(state.vertices.size() - 1);
+            }
+
+            if (state.wallMode && state.selectedVertex >= 0 && placedVertexIndex >= 0 &&
+                placedVertexIndex != state.selectedVertex) {
+                LineDef newLine;
+                newLine.v1 = state.selectedVertex;
+                newLine.v2 = placedVertexIndex;
+                state.lines.push_back(newLine);
+                state.selectedVertex = placedVertexIndex;
+            }
+        }
+
+        if (selectPressed) {
+            if (state.hoveredVertex != -1) {
+                if (!state.wallMode) {
+                    state.wallMode = true;
+                    state.selectedVertex = state.hoveredVertex;
+                } else if (state.selectedVertex != state.hoveredVertex) {
+                    LineDef newLine;
+                    newLine.v1 = state.selectedVertex;
+                    newLine.v2 = state.hoveredVertex;
+                    state.lines.push_back(newLine);
+                    state.selectedVertex = state.hoveredVertex;
+                }
+            } else {
+                state.wallMode = false;
+                state.selectedVertex = -1;
+            }
+        }
+
         renderer.beginFrame();
         renderer.drawGrid(camera, 1.0f);    // 1 unit = 1 grid cell
-        renderer.drawPoint2D(state.cursorX, state.cursorY, 0.2f, 0.1f, 0.4f, 1.0f);
+
+        for (const auto& line : state.lines) {
+            if (line.v1 < 0 || line.v2 < 0 ||
+                line.v1 >= static_cast<int>(state.vertices.size()) ||
+                line.v2 >= static_cast<int>(state.vertices.size())) {
+                continue;
+            }
+            const auto& v1 = state.vertices[line.v1];
+            const auto& v2 = state.vertices[line.v2];
+            renderer.drawLine2D(v1.first, v1.second, v2.first, v2.second, 1.0f, 1.0f, 1.0f);
+        }
+
         for (const auto& vert : state.vertices) {
             renderer.drawPoint2D(vert.first, vert.second, 0.12f, 0.0f, 1.0f, 1.0f);
         }
+
+        if (state.hoveredVertex >= 0 && state.hoveredVertex < static_cast<int>(state.vertices.size())) {
+            const auto& hv = state.vertices[state.hoveredVertex];
+            renderer.drawPoint2D(hv.first, hv.second, 0.16f, 1.0f, 1.0f, 0.0f);
+        }
+
+        if (state.wallMode && state.selectedVertex >= 0 &&
+            state.selectedVertex < static_cast<int>(state.vertices.size())) {
+            const auto& sv = state.vertices[state.selectedVertex];
+            renderer.drawPoint2D(sv.first, sv.second, 0.2f, 1.0f, 0.5f, 0.0f);
+        }
+
+        if (state.wallMode &&
+            state.selectedVertex >= 0 &&
+            state.hoveredVertex >= 0 &&
+            state.selectedVertex < static_cast<int>(state.vertices.size()) &&
+            state.hoveredVertex < static_cast<int>(state.vertices.size()) &&
+            state.selectedVertex != state.hoveredVertex) {
+            const auto& sv = state.vertices[state.selectedVertex];
+            const auto& hv = state.vertices[state.hoveredVertex];
+            renderer.drawLine2D(sv.first, sv.second, hv.first, hv.second, 1.0f, 1.0f, 0.0f);
+        }
+
+        const float cursorSize = 0.2f;
+        renderer.drawLine2D(state.cursorX - cursorSize, state.cursorY,
+                            state.cursorX + cursorSize, state.cursorY,
+                            0.1f, 0.4f, 1.0f);
+        renderer.drawLine2D(state.cursorX, state.cursorY - cursorSize,
+                            state.cursorX, state.cursorY + cursorSize,
+                            0.1f, 0.4f, 1.0f);
         renderer.endFrame(window);
     }
 

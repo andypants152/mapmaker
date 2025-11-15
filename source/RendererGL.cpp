@@ -86,8 +86,45 @@ void RendererGL::drawLine2D(float x1, float y1, float x2, float y2, float r, flo
 void RendererGL::drawPoint2D(float x, float y, float size, float r, float g, float b) {
     if (size <= 0.0f)
         return;
-    drawLine2D(x - size, y, x + size, y, r, g, b);
-    drawLine2D(x, y - size, x, y + size, r, g, b);
+    if (m_camera.zoom <= 0.0f)
+        return;
+
+    const float cx = worldToClipX(x);
+    const float cy = worldToClipY(y);
+    const float halfWidth = static_cast<float>(m_width) * 0.5f;
+    const float halfHeight = static_cast<float>(m_height) * 0.5f;
+    if (halfWidth <= 0.0f || halfHeight <= 0.0f)
+        return;
+
+    const float radiusX = size * m_camera.zoom / halfWidth;
+    const float radiusY = size * m_camera.zoom / halfHeight;
+
+    constexpr int segments = 20;
+    float verts[(segments + 2) * 2];
+    verts[0] = cx;
+    verts[1] = cy;
+
+    for (int i = 0; i <= segments; ++i) {
+        float angle = (static_cast<float>(i) / segments) * 6.28318530718f;
+        float xPos = cx + std::cos(angle) * radiusX;
+        float yPos = cy + std::sin(angle) * radiusY;
+        verts[(i + 1) * 2 + 0] = xPos;
+        verts[(i + 1) * 2 + 1] = yPos;
+    }
+
+    glUseProgram(m_program);
+    glUniform3f(m_uniformColor, r, g, b);
+
+    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
+
+    glEnableVertexAttribArray(m_attrPos);
+    glVertexAttribPointer(m_attrPos, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (const void*)0);
+
+    glDrawArrays(GL_TRIANGLE_FAN, 0, segments + 2);
+
+    glDisableVertexAttribArray(m_attrPos);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 void RendererGL::drawGrid(const Camera2D& cam, float gridSize) {
