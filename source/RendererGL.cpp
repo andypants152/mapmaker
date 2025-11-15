@@ -1,7 +1,9 @@
 // RendererGL.cpp
 #include "RendererGL.h"
+#include "EditorState.h"
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 RendererGL::RendererGL()
     : m_width(1280)
@@ -69,7 +71,7 @@ void RendererGL::drawLine2D(float x1, float y1, float x2, float y2, float r, flo
     };
 
     glUseProgram(m_program);
-    glUniform3f(m_uniformColor, r, g, b);
+    glUniform4f(m_uniformColor, r, g, b, 1.0f);
 
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
@@ -113,7 +115,7 @@ void RendererGL::drawPoint2D(float x, float y, float size, float r, float g, flo
     }
 
     glUseProgram(m_program);
-    glUniform3f(m_uniformColor, r, g, b);
+    glUniform4f(m_uniformColor, r, g, b, 1.0f);
 
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
@@ -122,6 +124,37 @@ void RendererGL::drawPoint2D(float x, float y, float size, float r, float g, flo
     glVertexAttribPointer(m_attrPos, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (const void*)0);
 
     glDrawArrays(GL_TRIANGLE_FAN, 0, segments + 2);
+
+    glDisableVertexAttribArray(m_attrPos);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void RendererGL::drawSectorFill(const Sector& sector, const EditorState& state,
+                                float r, float g, float b, float a) {
+    if (sector.vertices.size() < 3)
+        return;
+
+    std::vector<float> verts;
+    verts.reserve(sector.vertices.size() * 2);
+
+    for (int idx : sector.vertices) {
+        if (idx < 0 || idx >= static_cast<int>(state.vertices.size()))
+            return;
+        const auto& v = state.vertices[idx];
+        verts.push_back(worldToClipX(v.first));
+        verts.push_back(worldToClipY(v.second));
+    }
+
+    glUseProgram(m_program);
+    glUniform4f(m_uniformColor, r, g, b, a);
+
+    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * verts.size(), verts.data(), GL_DYNAMIC_DRAW);
+
+    glEnableVertexAttribArray(m_attrPos);
+    glVertexAttribPointer(m_attrPos, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (const void*)0);
+
+    glDrawArrays(GL_TRIANGLE_FAN, 0, static_cast<GLsizei>(sector.vertices.size()));
 
     glDisableVertexAttribArray(m_attrPos);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -218,9 +251,9 @@ bool RendererGL::initGL() {
 
     const char* fsSrc =
         "precision mediump float;\n"
-        "uniform vec3 uColor;\n"
+        "uniform vec4 uColor;\n"
         "void main() {\n"
-        "    gl_FragColor = vec4(uColor, 1.0);\n"
+        "    gl_FragColor = uColor;\n"
         "}\n";
 
     m_program = createProgram(vsSrc, fsSrc);

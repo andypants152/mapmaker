@@ -3,29 +3,12 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <utility>
 #include <vector>
 
 #include "RendererGL.h"
-
-struct LineDef {
-    int v1 = -1;
-    int v2 = -1;
-};
-
-struct EditorState {
-    float cursorX = 0.0f;
-    float cursorY = 0.0f;
-    float cursorRawX = 0.0f;
-    float cursorRawY = 0.0f;
-    bool snapEnabled = true;
-    float snapSize = 1.0f;
-    std::vector<std::pair<float, float>> vertices;
-    std::vector<LineDef> lines;
-    int hoveredVertex = -1;
-    int selectedVertex = -1;
-    bool wallMode = false;
-};
+#include "EditorState.h"
 
 static int findVertexAt(const EditorState& state, float x, float y, float eps = 0.0001f) {
     for (size_t i = 0; i < state.vertices.size(); ++i) {
@@ -70,6 +53,140 @@ static int findLineAt(const EditorState& state, float x, float y, float eps = 0.
         return static_cast<int>(i);
     }
     return -1;
+}
+
+static bool loopsEqual(const std::vector<int>& a, const std::vector<int>& b) {
+    if (a.size() != b.size())
+        return false;
+    if (a.empty())
+        return true;
+    const size_t count = a.size();
+    for (size_t offset = 0; offset < count; ++offset) {
+        bool match = true;
+        for (size_t i = 0; i < count; ++i) {
+            if (a[i] != b[(i + offset) % count]) {
+                match = false;
+                break;
+            }
+        }
+        if (match)
+            return true;
+    }
+    return false;
+}
+
+static void rebuildSectors(EditorState& state) {
+    state.sectors.clear();
+    if (state.vertices.size() < 3 || state.lines.size() < 3)
+        return;
+
+    std::vector<std::vector<int>> adjacency(state.vertices.size());
+    std::map<std::pair<int, int>, bool> edgeUsed;
+
+    for (const auto& line : state.lines) {
+        if (line.v1 < 0 || line.v2 < 0 ||
+            line.v1 >= static_cast<int>(state.vertices.size()) ||
+            line.v2 >= static_cast<int>(state.vertices.size()) ||
+            line.v1 == line.v2) {
+            continue;
+        }
+        adjacency[line.v1].push_back(line.v2);
+        adjacency[line.v2].push_back(line.v1);
+        edgeUsed[{line.v1, line.v2}] = false;
+        edgeUsed[{line.v2, line.v1}] = false;
+    }
+
+    for (size_t start = 0; start < adjacency.size(); ++start) {
+        for (int neighbor : adjacency[start]) {
+            auto key = std::make_pair(static_cast<int>(start), neighbor);
+            if (edgeUsed[key])
+                continue;
+
+            std::vector<int> loop;
+            std::vector<std::pair<int, int>> usedEdges;
+            loop.push_back(static_cast<int>(start));
+
+            edgeUsed[key] = true;
+            usedEdges.push_back(key);
+            int prev = static_cast<int>(start);
+            int curr = neighbor;
+            loop.push_back(curr);
+
+            bool closed = false;
+            while (true) {
+                if (curr == static_cast<int>(start)) {
+                    closed = true;
+                    break;
+                }
+
+                bool advanced = false;
+                for (int next : adjacency[curr]) {
+                    if (next == prev)
+                        continue;
+                    auto nextKey = std::make_pair(curr, next);
+                    if (edgeUsed.find(nextKey) == edgeUsed.end() || edgeUsed[nextKey])
+                        continue;
+                    edgeUsed[nextKey] = true;
+                    usedEdges.push_back(nextKey);
+                    prev = curr;
+                    curr = next;
+                    loop.push_back(curr);
+                    advanced = true;
+                    break;
+                }
+
+                if (!advanced) {
+                    break;
+                }
+            }
+
+            if (!closed)
+            {
+                for (const auto& e : usedEdges) {
+                    edgeUsed[e] = false;
+                }
+                continue;
+            }
+
+            loop.pop_back(); // remove duplicated start
+
+            if (loop.size() < 3) {
+                for (const auto& e : usedEdges) {
+                    edgeUsed[e] = false;
+                }
+                continue;
+            }
+
+            float area = 0.0f;
+            for (size_t i = 0; i < loop.size(); ++i) {
+                const auto& a = state.vertices[loop[i]];
+                const auto& b = state.vertices[loop[(i + 1) % loop.size()]];
+                area += (b.first - a.first) * (b.second + a.second);
+            }
+            if (area > 0.0f) {
+                std::reverse(loop.begin(), loop.end());
+            }
+
+            bool duplicate = false;
+            for (const auto& existing : state.sectors) {
+                if (loopsEqual(loop, existing.vertices)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+
+            if (!duplicate) {
+                Sector sector;
+                sector.vertices = loop;
+                state.sectors.push_back(std::move(sector));
+            }
+            else {
+                for (const auto& e : usedEdges) {
+                    edgeUsed[e] = false;
+                }
+            }
+        }
+    }
 }
 
 int main(int argc, char** argv) {
@@ -161,6 +278,7 @@ int main(int argc, char** argv) {
         bool selectPressed = false; // logical "A" action (wall mode)
         bool placePressed = false;  // logical "B" action (place vertex)
         bool deletePressed = false;
+        bool needRebuild = false;
 
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -284,10 +402,12 @@ int main(int argc, char** argv) {
                 } else if (state.hoveredVertex > deleteVertex) {
                     --state.hoveredVertex;
                 }
+                needRebuild = true;
             } else {
                 int deleteLine = findLineAt(state, state.cursorX, state.cursorY);
                 if (deleteLine != -1) {
                     state.lines.erase(state.lines.begin() + deleteLine);
+                    needRebuild = true;
                 }
             }
         }
@@ -298,6 +418,7 @@ int main(int argc, char** argv) {
             if (placedVertexIndex == -1) {
                 state.vertices.emplace_back(state.cursorX, state.cursorY);
                 placedVertexIndex = static_cast<int>(state.vertices.size() - 1);
+                needRebuild = true;
             }
 
             if (state.wallMode && state.selectedVertex >= 0 && placedVertexIndex >= 0 &&
@@ -307,6 +428,7 @@ int main(int argc, char** argv) {
                 newLine.v2 = placedVertexIndex;
                 state.lines.push_back(newLine);
                 state.selectedVertex = placedVertexIndex;
+                needRebuild = true;
             }
         }
 
@@ -321,6 +443,7 @@ int main(int argc, char** argv) {
                     newLine.v2 = state.hoveredVertex;
                     state.lines.push_back(newLine);
                     state.selectedVertex = state.hoveredVertex;
+                    needRebuild = true;
                 }
             } else {
                 state.wallMode = false;
@@ -328,8 +451,17 @@ int main(int argc, char** argv) {
             }
         }
 
+        if (needRebuild) {
+            rebuildSectors(state);
+            needRebuild = false;
+        }
+
         renderer.beginFrame();
         renderer.drawGrid(camera, 1.0f);    // 1 unit = 1 grid cell
+
+        for (const auto& sector : state.sectors) {
+            renderer.drawSectorFill(sector, state, 0.2f, 0.4f, 0.9f, 0.25f);
+        }
 
         for (const auto& line : state.lines) {
             if (line.v1 < 0 || line.v2 < 0 ||

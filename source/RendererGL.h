@@ -4,6 +4,9 @@
 #include <SDL2/SDL.h>
 #include <glad/glad.h>
 
+struct Sector;
+struct EditorState;
+
 struct Camera2D {
     float zoom = 1.0f;
     float offsetX = 0.0f;
@@ -20,6 +23,8 @@ public:
     void beginFrame();
     void drawLine2D(float x1, float y1, float x2, float y2, float r, float g, float b);
     void drawPoint2D(float x, float y, float size, float r, float g, float b);
+    void drawSectorFill(const Sector& sector, const EditorState& state,
+                        float r, float g, float b, float a);
     void drawGrid(const Camera2D& cam, float gridSize);
     void endFrame(SDL_Window* window);
 
