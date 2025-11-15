@@ -1,21 +1,22 @@
 // RendererGL.cpp
 #include "RendererGL.h"
+#include <cmath>
 #include <cstdio>
 
 RendererGL::RendererGL()
     : m_width(1280)
     , m_height(720)
+    , m_camera{}
     , m_program(0)
     , m_attrPos(-1)
-    , m_attrColor(-1)
+    , m_uniformColor(-1)
     , m_vbo(0)
-    , m_ibo(0)
 {
+    m_camera.zoom = 1.0f;
 }
 
 RendererGL::~RendererGL() {
     if (m_vbo) glDeleteBuffers(1, &m_vbo);
-    if (m_ibo) glDeleteBuffers(1, &m_ibo);
     if (m_program) glDeleteProgram(m_program);
 }
 
@@ -37,8 +38,11 @@ bool RendererGL::init(SDL_Window* window) {
     if (!initGL())
         return false;
 
-    if (!createTestTriangle())
+    glGenBuffers(1, &m_vbo);
+    if (!m_vbo) {
+        std::printf("Failed to create VBO for line rendering\n");
         return false;
+    }
 
     glViewport(0, 0, m_width, m_height);
     return true;
@@ -55,34 +59,108 @@ void RendererGL::beginFrame() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
-void RendererGL::drawTestTriangle() {
+void RendererGL::drawLine2D(float x1, float y1, float x2, float y2, float r, float g, float b) {
+    if (m_camera.zoom <= 0.0f)
+        return;
+
+    const float verts[4] = {
+        worldToClipX(x1), worldToClipY(y1),
+        worldToClipX(x2), worldToClipY(y2),
+    };
+
     glUseProgram(m_program);
+    glUniform3f(m_uniformColor, r, g, b);
 
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ibo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
 
     glEnableVertexAttribArray(m_attrPos);
-    glEnableVertexAttribArray(m_attrColor);
+    glVertexAttribPointer(m_attrPos, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (const void*)0);
 
-    const GLsizei stride = sizeof(float) * 5; // vec2 pos + vec3 color
-
-    glVertexAttribPointer(
-        m_attrPos, 2, GL_FLOAT, GL_FALSE,
-        stride, (const void*)0
-    );
-
-    glVertexAttribPointer(
-        m_attrColor, 3, GL_FLOAT, GL_FALSE,
-        stride, (const void*)(sizeof(float) * 2)
-    );
-
-    glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0);
+    glDrawArrays(GL_LINES, 0, 2);
 
     glDisableVertexAttribArray(m_attrPos);
-    glDisableVertexAttribArray(m_attrColor);
-
     glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+
+void RendererGL::drawPoint2D(float x, float y, float size, float r, float g, float b) {
+    if (size <= 0.0f)
+        return;
+    drawLine2D(x - size, y, x + size, y, r, g, b);
+    drawLine2D(x, y - size, x, y + size, r, g, b);
+}
+
+void RendererGL::drawGrid(const Camera2D& cam, float gridSize) {
+    if (gridSize <= 0.0f)
+        return;
+
+    setCamera(cam);
+
+    const float halfWidthWorld = (m_width * 0.5f) / m_camera.zoom;
+    const float halfHeightWorld = (m_height * 0.5f) / m_camera.zoom;
+
+    const float minX = m_camera.offsetX - halfWidthWorld;
+    const float maxX = m_camera.offsetX + halfWidthWorld;
+    const float minY = m_camera.offsetY - halfHeightWorld;
+    const float maxY = m_camera.offsetY + halfHeightWorld;
+
+    const float minPixelSpacing = 4.0f;
+    float fineStep = gridSize;
+    while (fineStep * m_camera.zoom < minPixelSpacing) {
+        fineStep *= 2.0f;
+    }
+
+    float coarseStep = fineStep * 4.0f;
+    if (coarseStep < fineStep) {
+        coarseStep = fineStep;
+    }
+
+    auto drawSpacing = [&](float spacing, float r, float g, float b) {
+        const float startX = std::floor(minX / spacing) * spacing;
+        const float endX = std::ceil(maxX / spacing) * spacing;
+        const float startY = std::floor(minY / spacing) * spacing;
+        const float endY = std::ceil(maxY / spacing) * spacing;
+
+        for (float x = startX; x <= endX; x += spacing) {
+            drawLine2D(x, minY, x, maxY, r, g, b);
+        }
+
+        for (float y = startY; y <= endY; y += spacing) {
+            drawLine2D(minX, y, maxX, y, r, g, b);
+        }
+    };
+
+    drawSpacing(coarseStep, 0.30f, 0.30f, 0.30f);
+    drawSpacing(fineStep, 0.18f, 0.18f, 0.18f);
+
+    if (minX <= 0.0f && maxX >= 0.0f) {
+        drawLine2D(0.0f, minY, 0.0f, maxY, 0.6f, 0.2f, 0.2f);
+    }
+    if (minY <= 0.0f && maxY >= 0.0f) {
+        drawLine2D(minX, 0.0f, maxX, 0.0f, 0.2f, 0.6f, 0.2f);
+    }
+}
+
+void RendererGL::setCamera(const Camera2D& cam) {
+    m_camera = cam;
+    if (m_camera.zoom <= 0.0001f)
+        m_camera.zoom = 0.0001f;
+}
+
+float RendererGL::worldToClipX(float worldX) const {
+    const float halfWidth = static_cast<float>(m_width) * 0.5f;
+    if (halfWidth <= 0.0f)
+        return 0.0f;
+    const float screenX = (worldX - m_camera.offsetX) * m_camera.zoom;
+    return screenX / halfWidth;
+}
+
+float RendererGL::worldToClipY(float worldY) const {
+    const float halfHeight = static_cast<float>(m_height) * 0.5f;
+    if (halfHeight <= 0.0f)
+        return 0.0f;
+    const float screenY = (worldY - m_camera.offsetY) * m_camera.zoom;
+    return screenY / halfHeight;
 }
 
 void RendererGL::endFrame(SDL_Window* window) {
@@ -97,18 +175,15 @@ bool RendererGL::initGL() {
 
     const char* vsSrc =
         "attribute vec2 aPos;\n"
-        "attribute vec3 aColor;\n"
-        "varying vec3 vColor;\n"
         "void main() {\n"
-        "    vColor = aColor;\n"
         "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
         "}\n";
 
     const char* fsSrc =
         "precision mediump float;\n"
-        "varying vec3 vColor;\n"
+        "uniform vec3 uColor;\n"
         "void main() {\n"
-        "    gl_FragColor = vec4(vColor, 1.0);\n"
+        "    gl_FragColor = vec4(uColor, 1.0);\n"
         "}\n";
 
     m_program = createProgram(vsSrc, fsSrc);
@@ -117,41 +192,13 @@ bool RendererGL::initGL() {
         return false;
     }
 
-    m_attrPos   = glGetAttribLocation(m_program, "aPos");
-    m_attrColor = glGetAttribLocation(m_program, "aColor");
+    m_attrPos = glGetAttribLocation(m_program, "aPos");
+    m_uniformColor = glGetUniformLocation(m_program, "uColor");
 
-    if (m_attrPos < 0 || m_attrColor < 0) {
-        std::printf("Failed to get attribute locations\n");
+    if (m_attrPos < 0 || m_uniformColor < 0) {
+        std::printf("Failed to get shader locations\n");
         return false;
     }
-
-    return true;
-}
-
-bool RendererGL::createTestTriangle() {
-    struct Vertex {
-        float x, y;
-        float r, g, b;
-    };
-
-    Vertex vertices[3] = {
-        { -0.5f, -0.5f, 1.f, 0.f, 0.f },
-        {  0.5f, -0.5f, 0.f, 1.f, 0.f },
-        {  0.0f,  0.5f, 0.f, 0.f, 1.f },
-    };
-
-    GLushort indices[3] = { 0, 1, 2 };
-
-    glGenBuffers(1, &m_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    glGenBuffers(1, &m_ibo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ibo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
-
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 
     return true;
 }
