@@ -6,6 +6,102 @@
 #include <cstdio>
 #include <vector>
 #include <vector>
+#include <png.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <cstdio>
+
+static GLuint createFallbackTexture() {
+    static const unsigned char fallback[16] = {
+        0x99,0x99,0x99,0xFF, 0x55,0x55,0x55,0xFF,
+        0x55,0x55,0x55,0xFF, 0x99,0x99,0x99,0xFF
+    };
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, fallback);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return tex;
+}
+
+GLuint loadTextureFromPNG(const char* path) {
+    FILE* fp = fopen(path, "rb");
+    if (!fp) {
+        std::printf("Failed to open texture: %s (using fallback)\n", path);
+        return createFallbackTexture();
+    }
+
+    png_structp png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+    if (!png_ptr) {
+        fclose(fp);
+        std::printf("png_create_read_struct failed for %s (using fallback)\n", path);
+        return createFallbackTexture();
+    }
+    png_infop info_ptr = png_create_info_struct(png_ptr);
+    if (!info_ptr) {
+        png_destroy_read_struct(&png_ptr, nullptr, nullptr);
+        fclose(fp);
+        std::printf("png_create_info_struct failed for %s (using fallback)\n", path);
+        return createFallbackTexture();
+    }
+    if (setjmp(png_jmpbuf(png_ptr))) {
+        png_destroy_read_struct(&png_ptr, &info_ptr, nullptr);
+        fclose(fp);
+        std::printf("png read error for %s (using fallback)\n", path);
+        return createFallbackTexture();
+    }
+
+    png_init_io(png_ptr, fp);
+    png_read_info(png_ptr, info_ptr);
+
+    png_uint_32 width, height;
+    int bit_depth, color_type;
+    png_get_IHDR(png_ptr, info_ptr, &width, &height, &bit_depth, &color_type, nullptr, nullptr, nullptr);
+
+    if (color_type == PNG_COLOR_TYPE_PALETTE)
+        png_set_palette_to_rgb(png_ptr);
+    if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
+        png_set_expand_gray_1_2_4_to_8(png_ptr);
+    if (png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS))
+        png_set_tRNS_to_alpha(png_ptr);
+    if (bit_depth == 16)
+        png_set_strip_16(png_ptr);
+    if (color_type == PNG_COLOR_TYPE_RGB)
+        png_set_filler(png_ptr, 0xFF, PNG_FILLER_AFTER);
+    if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+        png_set_gray_to_rgb(png_ptr);
+
+    png_read_update_info(png_ptr, info_ptr);
+
+    size_t rowbytes = png_get_rowbytes(png_ptr, info_ptr);
+    std::vector<png_byte> imageData(rowbytes * height);
+    std::vector<png_bytep> row_pointers(height);
+    for (png_uint_32 y = 0; y < height; ++y) {
+        row_pointers[y] = imageData.data() + y * rowbytes;
+    }
+    png_read_image(png_ptr, row_pointers.data());
+    png_read_end(png_ptr, nullptr);
+
+    png_destroy_read_struct(&png_ptr, &info_ptr, nullptr);
+    fclose(fp);
+
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, static_cast<GLsizei>(width), static_cast<GLsizei>(height), 0, GL_RGBA, GL_UNSIGNED_BYTE, imageData.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    std::printf("Loaded texture %s (%ux%u)\n", path, (unsigned)width, (unsigned)height);
+    return tex;
+}
 
 RendererGL::RendererGL()
     : m_width(1280)
@@ -16,11 +112,12 @@ RendererGL::RendererGL()
     , m_uniformColor(-1)
     , m_program3D(0)
     , m_attrPos3D(-1)
-    , m_attrColor3D(-1)
+    , m_attrUV3D(-1)
     , m_uniformMVP(-1)
+    , m_uniformTex(-1)
     , m_vbo(0)
     , m_vbo3DPos(0)
-    , m_vbo3DColor(0)
+    , m_vbo3DUV(0)
     , m_ibo3D(0)
 {
     m_camera.zoom = 1.0f;
@@ -29,7 +126,7 @@ RendererGL::RendererGL()
 RendererGL::~RendererGL() {
     if (m_vbo) glDeleteBuffers(1, &m_vbo);
     if (m_vbo3DPos) glDeleteBuffers(1, &m_vbo3DPos);
-    if (m_vbo3DColor) glDeleteBuffers(1, &m_vbo3DColor);
+    if (m_vbo3DUV) glDeleteBuffers(1, &m_vbo3DUV);
     if (m_ibo3D) glDeleteBuffers(1, &m_ibo3D);
     if (m_program) glDeleteProgram(m_program);
     if (m_program3D) glDeleteProgram(m_program3D);
@@ -60,9 +157,9 @@ bool RendererGL::init(SDL_Window* window) {
     }
 
     glGenBuffers(1, &m_vbo3DPos);
-    glGenBuffers(1, &m_vbo3DColor);
+    glGenBuffers(1, &m_vbo3DUV);
     glGenBuffers(1, &m_ibo3D);
-    if (!m_vbo3DPos || !m_vbo3DColor || !m_ibo3D) {
+    if (!m_vbo3DPos || !m_vbo3DUV || !m_ibo3D) {
         std::printf("Failed to create buffers for 3D rendering\n");
         return false;
     }
@@ -181,6 +278,102 @@ void RendererGL::drawSectorFill(const Sector& sector, const EditorState& state,
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
+void RendererGL::drawBillboard3D(const Camera3D& cam, float x, float y, float z, float size, GLuint tex, float r, float g, float b) {
+    // Billboard uses camera yaw for right vector and world-up for up vector to stay upright.
+    const float cosYaw = std::cos(cam.yaw);
+    const float sinYaw = std::sin(cam.yaw);
+    const float cosPitch = std::cos(cam.pitch);
+    const float sinPitch = std::sin(cam.pitch);
+    float rightX = cosYaw;
+    float rightY = -sinYaw;
+    float rightZ = 0.0f;
+    float upX = 0.0f;
+    float upY = 0.0f;
+    float upZ = 1.0f;
+
+    float hs = size * 0.5f;
+    float positions[12] = {
+        x - rightX * hs + upX * hs, y - rightY * hs + upY * hs, z + upZ * hs, // top-left
+        x + rightX * hs + upX * hs, y + rightY * hs + upY * hs, z + upZ * hs, // top-right
+        x + rightX * hs - upX * hs, y + rightY * hs - upY * hs, z - upZ * hs, // bottom-right
+        x - rightX * hs - upX * hs, y - rightY * hs - upY * hs, z - upZ * hs, // bottom-left
+    };
+    float uvs[8] = {
+        0.0f, 1.0f,
+        1.0f, 1.0f,
+        1.0f, 0.0f,
+        0.0f, 0.0f
+    };
+    uint16_t indices[6] = {0,1,2, 0,2,3};
+
+    float aspect = (m_height != 0) ? static_cast<float>(m_width) / static_cast<float>(m_height) : 1.0f;
+    const float fov = 70.0f * 3.1415926535f / 180.0f;
+    float f = 1.0f / std::tan(fov * 0.5f);
+    const float nearPlane = 0.05f;
+    const float farPlane = 500.0f;
+
+    float proj[16] = {
+        f / aspect, 0, 0, 0,
+        0, f, 0, 0,
+        0, 0, (farPlane + nearPlane) / (nearPlane - farPlane), -1,
+        0, 0, (2 * farPlane * nearPlane) / (nearPlane - farPlane), 0
+    };
+
+    float forwardX = cosPitch * sinYaw;
+    float forwardY = cosPitch * cosYaw;
+    float forwardZ = sinPitch;
+
+    float view[16] = {
+        rightX, upX, -forwardX, 0,
+        rightY, upY, -forwardY, 0,
+        rightZ, upZ, -forwardZ, 0,
+        0,      0,    0,        1
+    };
+
+    view[12] = -(cam.x * rightX + cam.y * rightY + cam.z * rightZ);
+    view[13] = -(cam.x * upX + cam.y * upY + cam.z * upZ);
+    view[14] =  (cam.x * forwardX + cam.y * forwardY + cam.z * forwardZ);
+
+    float mvp[16];
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            mvp[col * 4 + row] =
+                proj[0 * 4 + row] * view[col * 4 + 0] +
+                proj[1 * 4 + row] * view[col * 4 + 1] +
+                proj[2 * 4 + row] * view[col * 4 + 2] +
+                proj[3 * 4 + row] * view[col * 4 + 3];
+        }
+    }
+
+    glUseProgram(m_program3D);
+    glUniformMatrix4fv(m_uniformMVP, 1, GL_FALSE, mvp);
+    glUniform1i(m_uniformTex, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex ? tex : m_texProjectileSprite);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glBindBuffer(GL_ARRAY_BUFFER, m_vbo3DPos);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(positions), positions, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(m_attrPos3D);
+    glVertexAttribPointer(m_attrPos3D, 3, GL_FLOAT, GL_FALSE, 0, (const void*)0);
+
+    glBindBuffer(GL_ARRAY_BUFFER, m_vbo3DUV);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(uvs), uvs, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(m_attrUV3D);
+    glVertexAttribPointer(m_attrUV3D, 2, GL_FLOAT, GL_FALSE, 0, (const void*)0);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ibo3D);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_DYNAMIC_DRAW);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+
+    glDisableVertexAttribArray(m_attrPos3D);
+    glDisableVertexAttribArray(m_attrUV3D);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glDisable(GL_BLEND);
+}
+
 void RendererGL::drawMesh3D(const Mesh3D& mesh, const Camera3D& cam) {
     glEnable(GL_DEPTH_TEST);
     glClearColor(0.02f, 0.02f, 0.05f, 1.0f);
@@ -203,7 +396,6 @@ void RendererGL::drawMesh3D(const Mesh3D& mesh, const Camera3D& cam) {
     const float sinYaw = std::sin(cam.yaw);
     const float cosPitch = std::cos(cam.pitch);
     const float sinPitch = std::sin(cam.pitch);
-
     float forwardX = cosPitch * sinYaw;
     float forwardY = cosPitch * cosYaw;
     float forwardZ = sinPitch;
@@ -240,24 +432,35 @@ void RendererGL::drawMesh3D(const Mesh3D& mesh, const Camera3D& cam) {
 
     glUseProgram(m_program3D);
     glUniformMatrix4fv(m_uniformMVP, 1, GL_FALSE, mvp);
+    glUniform1i(m_uniformTex, 0);
+    glActiveTexture(GL_TEXTURE0);
 
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo3DPos);
     glBufferData(GL_ARRAY_BUFFER, sizeof(float) * mesh.vertices.size(), mesh.vertices.data(), GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray(m_attrPos3D);
     glVertexAttribPointer(m_attrPos3D, 3, GL_FLOAT, GL_FALSE, 0, (const void*)0);
 
-    glBindBuffer(GL_ARRAY_BUFFER, m_vbo3DColor);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * mesh.colors.size(), mesh.colors.data(), GL_DYNAMIC_DRAW);
-    glEnableVertexAttribArray(m_attrColor3D);
-    glVertexAttribPointer(m_attrColor3D, 3, GL_FLOAT, GL_FALSE, 0, (const void*)0);
+    glBindBuffer(GL_ARRAY_BUFFER, m_vbo3DUV);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * mesh.uvs.size(), mesh.uvs.data(), GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(m_attrUV3D);
+    glVertexAttribPointer(m_attrUV3D, 2, GL_FLOAT, GL_FALSE, 0, (const void*)0);
 
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ibo3D);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(uint16_t) * mesh.indices.size(), mesh.indices.data(), GL_DYNAMIC_DRAW);
 
-    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(mesh.indices.size()), GL_UNSIGNED_SHORT, 0);
+    auto drawRange = [&](size_t start, size_t count, GLuint tex) {
+        if (count == 0 || tex == 0)
+            return;
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(count), GL_UNSIGNED_SHORT, (const void*)(start * sizeof(uint16_t)));
+    };
+
+    drawRange(mesh.floorIndexStart, mesh.floorIndexCount, m_texFloor);
+    drawRange(mesh.ceilingIndexStart, mesh.ceilingIndexCount, m_texCeil);
+    drawRange(mesh.wallIndexStart, mesh.wallIndexCount, m_texWall);
 
     glDisableVertexAttribArray(m_attrPos3D);
-    glDisableVertexAttribArray(m_attrColor3D);
+    glDisableVertexAttribArray(m_attrUV3D);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     glDisable(GL_DEPTH_TEST);
@@ -318,6 +521,26 @@ void RendererGL::setCamera(const Camera2D& cam) {
     m_camera = cam;
     if (m_camera.zoom <= 0.0001f)
         m_camera.zoom = 0.0001f;
+}
+
+void RendererGL::setTextures(GLuint floorTex, GLuint wallTex, GLuint ceilTex) {
+    m_texFloor = floorTex;
+    m_texWall = wallTex;
+    m_texCeil = ceilTex;
+}
+
+void RendererGL::setBillboardTextures(GLuint enemyTex, GLuint projectileTex) {
+    m_texEnemySprite = enemyTex;
+    m_texProjectileSprite = projectileTex;
+}
+
+void RendererGL::setItemTextures(GLuint healthTex, GLuint manaTex) {
+    m_texItemHealth = healthTex;
+    m_texItemMana = manaTex;
+}
+
+void RendererGL::setEffectTextures(GLuint blockFlashTex) {
+    m_texBlockFlash = blockFlashTex;
 }
 
 float RendererGL::worldToClipX(float worldX) const {
@@ -417,18 +640,19 @@ bool RendererGL::initGL() {
     const char* vsSrc3D =
         "uniform mat4 uMVP;\n"
         "attribute vec3 aPos;\n"
-        "attribute vec3 aColor;\n"
-        "varying vec3 vColor;\n"
+        "attribute vec2 aUV;\n"
+        "varying vec2 vUV;\n"
         "void main() {\n"
-        "    vColor = aColor;\n"
+        "    vUV = aUV;\n"
         "    gl_Position = uMVP * vec4(aPos, 1.0);\n"
         "}\n";
 
     const char* fsSrc3D =
         "precision mediump float;\n"
-        "varying vec3 vColor;\n"
+        "varying vec2 vUV;\n"
+        "uniform sampler2D uTex;\n"
         "void main() {\n"
-        "    gl_FragColor = vec4(vColor, 1.0);\n"
+        "    gl_FragColor = texture2D(uTex, vUV);\n"
         "}\n";
 
     m_program3D = createProgram(vsSrc3D, fsSrc3D);
@@ -438,10 +662,11 @@ bool RendererGL::initGL() {
     }
 
     m_attrPos3D   = glGetAttribLocation(m_program3D, "aPos");
-    m_attrColor3D = glGetAttribLocation(m_program3D, "aColor");
+    m_attrUV3D    = glGetAttribLocation(m_program3D, "aUV");
     m_uniformMVP  = glGetUniformLocation(m_program3D, "uMVP");
+    m_uniformTex  = glGetUniformLocation(m_program3D, "uTex");
 
-    if (m_attrPos3D < 0 || m_attrColor3D < 0 || m_uniformMVP < 0) {
+    if (m_attrPos3D < 0 || m_attrUV3D < 0 || m_uniformMVP < 0 || m_uniformTex < 0) {
         std::printf("Failed to get 3D shader locations\n");
         return false;
     }

@@ -8,6 +8,7 @@ struct Sector;
 struct EditorState;
 struct Camera3D;
 struct Mesh3D;
+GLuint loadTextureFromPNG(const char* path);
 
 struct Camera2D {
     float zoom = 1.0f;
@@ -28,8 +29,14 @@ public:
     void drawSectorFill(const Sector& sector, const EditorState& state,
                         float r, float g, float b, float a);
     void drawMesh3D(const Mesh3D& mesh, const Camera3D& cam);
+    void drawBillboard3D(const Camera3D& cam, float x, float y, float z, float size, GLuint tex, float r, float g, float b);
     void drawGrid(const Camera2D& cam, float gridSize);
     void endFrame(SDL_Window* window);
+
+    void setTextures(GLuint floorTex, GLuint wallTex, GLuint ceilTex);
+    void setBillboardTextures(GLuint enemyTex, GLuint projectileTex);
+    void setItemTextures(GLuint healthTex, GLuint manaTex);
+    void setEffectTextures(GLuint blockFlashTex);
 
     void setCamera(const Camera2D& cam);
 
@@ -55,11 +62,21 @@ private:
 
     GLuint m_program3D;
     GLint  m_attrPos3D;
-    GLint  m_attrColor3D;
+    GLint  m_attrUV3D;
     GLint  m_uniformMVP;
+    GLint  m_uniformTex;
 
     GLuint m_vbo;
     GLuint m_vbo3DPos;
-    GLuint m_vbo3DColor;
+    GLuint m_vbo3DUV;
     GLuint m_ibo3D;
+
+    GLuint m_texFloor = 0;
+    GLuint m_texWall = 0;
+    GLuint m_texCeil = 0;
+    GLuint m_texEnemySprite = 0;
+    GLuint m_texProjectileSprite = 0;
+    GLuint m_texItemHealth = 0;
+    GLuint m_texItemMana = 0;
+    GLuint m_texBlockFlash = 0;
 };
