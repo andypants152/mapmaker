@@ -5,11 +5,63 @@
 #include <cmath>
 #include <cstdio>
 #include <vector>
-#include <vector>
+#include <array>
+#include <cctype>
+#include <cstring>
 #include <png.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <cstdio>
+
+static bool getGlyph(char c, std::array<uint8_t, 5>& out) {
+    switch (std::toupper(static_cast<unsigned char>(c))) {
+        case 'A': out = {0x7E,0x11,0x11,0x11,0x7E}; return true;
+        case 'B': out = {0x7F,0x49,0x49,0x49,0x36}; return true;
+        case 'C': out = {0x3E,0x41,0x41,0x41,0x22}; return true;
+        case 'D': out = {0x7F,0x41,0x41,0x22,0x1C}; return true;
+        case 'E': out = {0x7F,0x49,0x49,0x49,0x41}; return true;
+        case 'F': out = {0x7F,0x09,0x09,0x09,0x01}; return true;
+        case 'G': out = {0x3E,0x41,0x49,0x49,0x7A}; return true;
+        case 'H': out = {0x7F,0x08,0x08,0x08,0x7F}; return true;
+        case 'I': out = {0x00,0x41,0x7F,0x41,0x00}; return true;
+        case 'J': out = {0x20,0x40,0x41,0x3F,0x01}; return true;
+        case 'K': out = {0x7F,0x08,0x14,0x22,0x41}; return true;
+        case 'L': out = {0x7F,0x40,0x40,0x40,0x40}; return true;
+        case 'M': out = {0x7F,0x02,0x0C,0x02,0x7F}; return true;
+        case 'N': out = {0x7F,0x04,0x08,0x10,0x7F}; return true;
+        case 'O': out = {0x3E,0x41,0x41,0x41,0x3E}; return true;
+        case 'P': out = {0x7F,0x09,0x09,0x09,0x06}; return true;
+        case 'Q': out = {0x3E,0x41,0x51,0x21,0x5E}; return true;
+        case 'R': out = {0x7F,0x09,0x19,0x29,0x46}; return true;
+        case 'S': out = {0x26,0x49,0x49,0x49,0x32}; return true;
+        case 'T': out = {0x01,0x01,0x7F,0x01,0x01}; return true;
+        case 'U': out = {0x3F,0x40,0x40,0x40,0x3F}; return true;
+        case 'V': out = {0x1F,0x20,0x40,0x20,0x1F}; return true;
+        case 'W': out = {0x7F,0x20,0x18,0x20,0x7F}; return true;
+        case 'X': out = {0x63,0x14,0x08,0x14,0x63}; return true;
+        case 'Y': out = {0x03,0x04,0x78,0x04,0x03}; return true;
+        case 'Z': out = {0x61,0x51,0x49,0x45,0x43}; return true;
+        case '0': out = {0x3E,0x45,0x49,0x51,0x3E}; return true;
+        case '1': out = {0x00,0x21,0x7F,0x01,0x00}; return true;
+        case '2': out = {0x23,0x45,0x49,0x51,0x21}; return true;
+        case '3': out = {0x22,0x41,0x49,0x49,0x36}; return true;
+        case '4': out = {0x0C,0x14,0x24,0x7F,0x04}; return true;
+        case '5': out = {0x72,0x51,0x51,0x51,0x4E}; return true;
+        case '6': out = {0x3E,0x49,0x49,0x49,0x32}; return true;
+        case '7': out = {0x01,0x01,0x7D,0x03,0x01}; return true;
+        case '8': out = {0x36,0x49,0x49,0x49,0x36}; return true;
+        case '9': out = {0x26,0x49,0x49,0x49,0x3E}; return true;
+        case ':': out = {0x00,0x36,0x36,0x00,0x00}; return true;
+        case '.': out = {0x00,0x60,0x60,0x00,0x00}; return true;
+        case ',': out = {0x00,0x40,0x60,0x00,0x00}; return true;
+        case '(': out = {0x00,0x1C,0x22,0x41,0x00}; return true;
+        case ')': out = {0x00,0x41,0x22,0x1C,0x00}; return true;
+        case '-': out = {0x08,0x08,0x08,0x08,0x08}; return true;
+        case '+': out = {0x08,0x08,0x3E,0x08,0x08}; return true;
+        case '/': out = {0x40,0x30,0x0C,0x03,0x00}; return true;
+        case ' ': out = {0x00,0x00,0x00,0x00,0x00}; return true;
+        default: out = {0x00,0x00,0x00,0x00,0x00}; return true;
+    }
+}
 
 static GLuint createFallbackTexture() {
     static const unsigned char fallback[16] = {
@@ -136,15 +188,6 @@ bool RendererGL::init(SDL_Window* window) {
     if (!window) {
         std::printf("RendererGL::init called with null window\n");
         return false;
-    }
-
-    static bool s_gladInitialized = false;
-    if (!s_gladInitialized) {
-        if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
-            std::printf("Failed to initialize GLAD via SDL\n");
-            return false;
-        }
-        s_gladInitialized = true;
     }
 
     if (!initGL())
@@ -720,4 +763,110 @@ GLuint RendererGL::createProgram(const char* vsSrc, const char* fsSrc) {
     }
 
     return program;
+}
+
+void RendererGL::drawQuad2D(float x, float y, float w, float h, float r, float g, float b, float a, int screenW, int screenH) {
+    if (w <= 0.0f || h <= 0.0f || screenW <= 0 || screenH <= 0)
+        return;
+
+    // Convert from screen space (origin top-left) to clip space
+    float x0 = (x / (static_cast<float>(screenW) * 0.5f)) - 1.0f;
+    float y0 = 1.0f - (y / (static_cast<float>(screenH) * 0.5f));
+    float x1 = ((x + w) / (static_cast<float>(screenW) * 0.5f)) - 1.0f;
+    float y1 = 1.0f - ((y + h) / (static_cast<float>(screenH) * 0.5f));
+
+    const float verts[8] = {
+        x0, y0,
+        x1, y0,
+        x1, y1,
+        x0, y1
+    };
+
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(m_program);
+    glUniform4f(m_uniformColor, r, g, b, a);
+
+    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(m_attrPos);
+    glVertexAttribPointer(m_attrPos, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (const void*)0);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    glDisableVertexAttribArray(m_attrPos);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void RendererGL::drawText2D(const std::string& text, float x, float y, float scale, float r, float g, float b, float a, int screenW, int screenH) {
+    float cursorX = x;
+    const float advance = 6.0f * scale;
+    for (char c : text) {
+        std::array<uint8_t, 5> glyph{};
+        if (!getGlyph(c, glyph))
+            continue;
+        for (int col = 0; col < 5; ++col) {
+            uint8_t bits = glyph[col];
+            for (int row = 0; row < 7; ++row) {
+                if (bits & (1u << row)) {
+                    float gx = cursorX + static_cast<float>(col) * scale;
+                    float gy = y + static_cast<float>(row) * scale;
+                    drawQuad2D(gx, gy, scale, scale, r, g, b, a, screenW, screenH);
+                }
+            }
+        }
+        cursorX += advance;
+    }
+}
+
+static const char* hudEntityName(EntityType t) {
+    switch (t) {
+        case EntityType::PlayerStart: return "PlayerStart";
+        case EntityType::EnemyWizard: return "EnemyWizard";
+        case EntityType::ItemPickup:  return "ItemPickup";
+    }
+    return "Unknown";
+}
+
+void RendererGL::drawEditorHUD(const EditorState& state, int screenW, int screenH) {
+    if (screenW <= 0 || screenH <= 0)
+        return;
+
+    const float border = 6.0f;
+    const float br = 0.0f, bg = 0.7f, bb = 1.0f, ba = 1.0f;
+    drawQuad2D(0.0f, 0.0f, static_cast<float>(screenW), border, br, bg, bb, ba, screenW, screenH);
+    drawQuad2D(0.0f, static_cast<float>(screenH) - border, static_cast<float>(screenW), border, br, bg, bb, ba, screenW, screenH);
+    drawQuad2D(0.0f, 0.0f, border, static_cast<float>(screenH), br, bg, bb, ba, screenW, screenH);
+    drawQuad2D(static_cast<float>(screenW) - border, 0.0f, border, static_cast<float>(screenH), br, bg, bb, ba, screenW, screenH);
+
+    const float boxW = 260.0f;
+    const float boxH = 60.0f;
+    const float boxX = 10.0f;
+    const float boxY = static_cast<float>(screenH) - boxH - 10.0f;
+    drawQuad2D(boxX, boxY, boxW, boxH, 0.1f, 0.1f, 0.1f, 0.6f, screenW, screenH);
+
+    std::string mode;
+    if (state.playMode) {
+        mode = "MODE: PLAY MODE";
+    } else if (state.entityMode) {
+        mode = "MODE: ENTITY EDITING (" + std::string(hudEntityName(state.entityBrush)) + ")";
+    } else if (state.wallMode) {
+        mode = "MODE: WALL EDITING";
+    } else {
+        mode = "MODE: VERTEX EDITING";
+    }
+
+    char snapBuf[64];
+    if (state.snapEnabled) {
+        std::snprintf(snapBuf, sizeof(snapBuf), "SNAP: ON (%.2f)", state.snapSize);
+    } else {
+        std::snprintf(snapBuf, sizeof(snapBuf), "SNAP: OFF");
+    }
+
+    char cursorBuf[96];
+    std::snprintf(cursorBuf, sizeof(cursorBuf), "CURSOR: (X: %.2f, Y: %.2f)", state.cursorX, state.cursorY);
+
+    float textX = boxX + 12.0f;
+    float textY = boxY + 12.0f;
+    float scale = 2.0f;
+    drawText2D(mode, textX, textY, scale, 1.0f, 1.0f, 1.0f, 1.0f, screenW, screenH);
+    drawText2D(snapBuf, textX, textY + 16.0f, scale, 1.0f, 1.0f, 1.0f, 1.0f, screenW, screenH);
+    drawText2D(cursorBuf, textX, textY + 32.0f, scale, 1.0f, 1.0f, 1.0f, 1.0f, screenW, screenH);
 }

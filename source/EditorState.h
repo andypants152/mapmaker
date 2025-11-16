@@ -28,7 +28,6 @@ struct Camera3D {
 enum class EntityType {
     PlayerStart,
     EnemyWizard,
-    EnemySpawn,
     ItemPickup
 };
 

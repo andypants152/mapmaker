@@ -2,7 +2,15 @@
 #pragma once
 
 #include <SDL2/SDL.h>
-#include <glad/glad.h>
+#ifdef __SWITCH__
+#include <GLES2/gl2.h>
+#else
+#ifndef GL_GLEXT_PROTOTYPES
+#define GL_GLEXT_PROTOTYPES 1
+#endif
+#include <SDL2/SDL_opengl.h>
+#endif
+#include <string>
 
 struct Sector;
 struct EditorState;
@@ -39,6 +47,10 @@ public:
     void setEffectTextures(GLuint blockFlashTex);
 
     void setCamera(const Camera2D& cam);
+
+    void drawQuad2D(float x, float y, float w, float h, float r, float g, float b, float a, int screenW, int screenH);
+    void drawText2D(const std::string& text, float x, float y, float scale, float r, float g, float b, float a, int screenW, int screenH);
+    void drawEditorHUD(const EditorState& state, int screenW, int screenH);
 
 private:
     bool initGL();

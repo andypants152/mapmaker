@@ -1,28 +1,20 @@
 // main.cpp
-#include <switch.h>       // for appletMainLoop / console logging if you want
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <set>
+#include <string>
 #include <utility>
 #include <vector>
-#include <unistd.h>
 #include <cstdio>
 
-#ifdef __cplusplus
-extern "C" {
-    void userAppInit(void);
-    void userAppExit(void);
-}
+#ifdef __SWITCH__
+#include <switch.h>
 #endif
 
-static int g_nxlinkSock = -1;
-static inline void initNxLink() { userAppInit(); }
-
-#ifdef __cplusplus
-#endif
-
+#include "Platform.h"
 #include "RendererGL.h"
 #include "EditorState.h"
 
@@ -91,6 +83,14 @@ static bool loopsEqual(const std::vector<int>& a, const std::vector<int>& b) {
     return false;
 }
 
+static void worldFromMouse(int mouseX, int mouseY, int winW, int winH, const Camera2D& cam,
+                           float& worldX, float& worldY) {
+    const float halfW = static_cast<float>(winW) * 0.5f;
+    const float halfH = static_cast<float>(winH) * 0.5f;
+    worldX = (static_cast<float>(mouseX) - halfW) / (halfW * cam.zoom) + cam.offsetX;
+    worldY = (halfH - static_cast<float>(mouseY)) / (halfH * cam.zoom) + cam.offsetY;
+}
+
 struct Vec2 {
     float x;
     float y;
@@ -147,8 +147,7 @@ static bool polygonSelfIntersects(const std::vector<Vec2>& verts) {
 static EntityType nextEntityBrush(EntityType t) {
     switch (t) {
         case EntityType::PlayerStart: return EntityType::EnemyWizard;
-        case EntityType::EnemyWizard: return EntityType::EnemySpawn;
-        case EntityType::EnemySpawn:  return EntityType::ItemPickup;
+        case EntityType::EnemyWizard: return EntityType::ItemPickup;
         case EntityType::ItemPickup:  return EntityType::PlayerStart;
     }
     return EntityType::PlayerStart;
@@ -158,7 +157,6 @@ static const char* entityTypeName(EntityType t) {
     switch (t) {
         case EntityType::PlayerStart: return "PlayerStart";
         case EntityType::EnemyWizard: return "EnemyWizard";
-        case EntityType::EnemySpawn:  return "EnemySpawn";
         case EntityType::ItemPickup:  return "ItemPickup";
     }
     return "Unknown";
@@ -517,32 +515,22 @@ static void buildSectorsFromLinedefs(EditorState& state) {
     }
 }
 
-extern "C" {
-
-void userAppInit(void) {
-    nxlinkStdio();
-    socketInitializeDefault();
-    romfsInit();
-    setvbuf(stdout, NULL, _IONBF, 0);
-    printf("userAppInit(): nxlink ready\n");
-}
-
-void userAppExit(void) {
-    romfsExit();
-    socketExit();
-}
-
-}
-
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 
-    initNxLink();
+    if (!PlatformInit()) {
+        std::printf("PlatformInit failed\n");
+        return -1;
+    }
+
+#ifdef __SWITCH__
     consoleDebugInit(debugDevice_SVC);
+#endif
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
         printf("SDL_Init failed: %s\n", SDL_GetError());
+        PlatformShutdown();
         return -1;
     }
 
@@ -561,17 +549,25 @@ int main(int argc, char** argv) {
     int winW = 1280;
     int winH = 720;
 
+    Uint32 windowFlags = SDL_WINDOW_OPENGL;
+#ifdef __SWITCH__
+    windowFlags |= SDL_WINDOW_FULLSCREEN;
+#else
+    windowFlags |= SDL_WINDOW_RESIZABLE;
+#endif
+
     SDL_Window* window = SDL_CreateWindow(
         "Switch Doom Editor",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         winW, winH,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN
+        windowFlags
     );
 
     if (!window) {
         printf("SDL_CreateWindow failed: %s\n", SDL_GetError());
         SDL_Quit();
+        PlatformShutdown();
         return -1;
     }
 
@@ -580,6 +576,7 @@ int main(int argc, char** argv) {
         printf("SDL_GL_CreateContext failed: %s\n", SDL_GetError());
         SDL_DestroyWindow(window);
         SDL_Quit();
+        PlatformShutdown();
         return -1;
     }
 
@@ -591,6 +588,7 @@ int main(int argc, char** argv) {
         SDL_GL_DeleteContext(glCtx);
         SDL_DestroyWindow(window);
         SDL_Quit();
+        PlatformShutdown();
         return -1;
     }
 
@@ -608,6 +606,9 @@ int main(int argc, char** argv) {
             }
         }
     }
+    if (!controller) {
+        std::printf("No SDL controller detected; keyboard/mouse controls active on desktop.\n");
+    }
 
     EditorState state;
     buildDefaultMap(state);
@@ -618,26 +619,90 @@ int main(int argc, char** argv) {
     buildSectorsFromLinedefs(state);
     rebuildWorldMesh(state, state.worldMesh);
     Camera3D fpsCamera;
-    GLuint texWall = loadTextureFromPNG("romfs:/data/wall.png");
-    GLuint texFloor = loadTextureFromPNG("romfs:/data/floor.png");
-    GLuint texCeil = loadTextureFromPNG("romfs:/data/ceiling.png");
+    std::string dataPath = PlatformDataPath();
+    GLuint texWall = loadTextureFromPNG((dataPath + "wall.png").c_str());
+    GLuint texFloor = loadTextureFromPNG((dataPath + "floor.png").c_str());
+    GLuint texCeil = loadTextureFromPNG((dataPath + "ceiling.png").c_str());
     renderer.setTextures(texFloor, texWall, texCeil);
-    GLuint texEnemySprite = loadTextureFromPNG("romfs:/data/enemy_wizard.png");
-    GLuint texProjSprite = loadTextureFromPNG("romfs:/data/projectile_orb.png");
-    GLuint texItemHealth = loadTextureFromPNG("romfs:/data/item_health.png");
-    GLuint texItemMana   = loadTextureFromPNG("romfs:/data/item_mana.png");
-    GLuint texBlockFlash = loadTextureFromPNG("romfs:/data/block_flash.png");
+    GLuint texEnemySprite = loadTextureFromPNG((dataPath + "enemy_wizard.png").c_str());
+    GLuint texProjSprite = loadTextureFromPNG((dataPath + "projectile_orb.png").c_str());
+    GLuint texItemHealth = loadTextureFromPNG((dataPath + "item_health.png").c_str());
+    GLuint texItemMana   = loadTextureFromPNG((dataPath + "item_mana.png").c_str());
+    GLuint texBlockFlash = loadTextureFromPNG((dataPath + "block_flash.png").c_str());
     renderer.setBillboardTextures(texEnemySprite, texProjSprite);
     renderer.setItemTextures(texItemHealth, texItemMana);
     renderer.setEffectTextures(texBlockFlash);
 
-    bool running = true;
-    uint32_t lastTicks = SDL_GetTicks();
+    auto enterPlayMode = [&]() {
+        if (state.playMode)
+            return;
+        state.playMode = true;
+        state.wallMode = false;
+        state.selectedVertex = -1;
+        state.hoveredVertex = -1;
+        state.selectedEntity = -1;
+        state.hoveredEntity = -1;
+        fpsCamera = Camera3D{};
+        bool foundStart = false;
+        for (const auto& e : state.entities) {
+            if (e.type == EntityType::PlayerStart) {
+                fpsCamera.x = e.x;
+                fpsCamera.y = e.y;
+                fpsCamera.z = 1.7f;
+                foundStart = true;
+                break;
+            }
+        }
+        if (!foundStart) {
+            fpsCamera.x = 4.0f;
+            fpsCamera.y = 3.0f;
+            fpsCamera.z = 1.7f;
+        }
+        state.enemies.clear();
+        for (const auto& e : state.entities) {
+            if (e.type == EntityType::EnemyWizard) {
+                state.enemies.push_back({ e.x, e.y, 1.4f, 0.0f, true });
+            }
+        }
+        state.items.clear();
+        for (const auto& e : state.entities) {
+            if (e.type == EntityType::ItemPickup) {
+                state.items.push_back({ e.x, e.y, 1.0f, e.type, true });
+            }
+        }
+        state.projectiles.active.clear();
+        state.blocking = false;
+        state.blockFlashTimer = 0.0f;
+#ifndef __SWITCH__
+        SDL_SetRelativeMouseMode(SDL_TRUE);
+#endif
+    };
 
-    // Main loop; on Switch you can also wrap in appletMainLoop()
-    while (running && appletMainLoop()) {
-        uint32_t now = SDL_GetTicks();
-        float dt = (now - lastTicks) / 1000.0f;
+    auto exitPlayMode = [&]() {
+        if (!state.playMode)
+            return;
+        state.playMode = false;
+        state.blocking = false;
+        state.blockFlashTimer = 0.0f;
+        state.projectiles.active.clear();
+        state.enemies.clear();
+        fpsCamera = Camera3D{};
+#ifndef __SWITCH__
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+#endif
+    };
+
+    bool running = true;
+    bool fullscreen = (windowFlags & SDL_WINDOW_FULLSCREEN) != 0;
+    bool shiftHeld = false;
+    int mouseX = 0;
+    int mouseY = 0;
+    uint64_t lastTicks = PlatformTicks();
+
+    // Main loop; PlatformRunning handles Switch appletMainLoop or desktop quit events
+    while (running && PlatformRunning()) {
+        uint64_t now = PlatformTicks();
+        float dt = static_cast<float>(now - lastTicks) / 1000.0f;
         lastTicks = now;
 
         bool selectPressed = false; // logical "A" action (wall mode)
@@ -645,6 +710,8 @@ int main(int argc, char** argv) {
         bool deletePressed = false;
         bool togglePlayPressed = false;
         bool needRebuild = false;
+        bool mouseFire = false;
+        bool mouseBlock = false;
 
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -654,6 +721,8 @@ int main(int argc, char** argv) {
                     break;
                 case SDL_WINDOWEVENT:
                     if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                        winW = ev.window.data1;
+                        winH = ev.window.data2;
                         renderer.resize(ev.window.data1, ev.window.data2);
                     }
                     break;
@@ -688,47 +757,235 @@ int main(int argc, char** argv) {
                         state.hoveredEntity = -1;
                     }
                     break;
+                case SDL_KEYDOWN:
+                    if (ev.key.keysym.sym == SDLK_LSHIFT || ev.key.keysym.sym == SDLK_RSHIFT) {
+                        shiftHeld = true;
+                    }
+#ifndef __SWITCH__
+                    if (ev.key.keysym.sym == SDLK_ESCAPE) {
+                        running = false;
+                        break;
+                    }
+                    if ((ev.key.keysym.sym == SDLK_RETURN) && (ev.key.keysym.mod & KMOD_ALT)) {
+                        fullscreen = !fullscreen;
+                        SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                        break;
+                    }
+                    if (ev.key.keysym.sym == SDLK_TAB && ev.key.repeat == 0) {
+                        if (state.playMode) exitPlayMode();
+                        else enterPlayMode();
+                    }
+                    if (ev.key.keysym.sym == SDLK_1 && ev.key.repeat == 0) {
+                        if (state.playMode) exitPlayMode();
+                        state.entityMode = false;
+                        state.wallMode = false;
+                    }
+                    if (ev.key.keysym.sym == SDLK_2 && ev.key.repeat == 0) {
+                        if (state.playMode) exitPlayMode();
+                        state.entityMode = true;
+                        state.wallMode = false;
+                    }
+                    if (ev.key.keysym.sym == SDLK_3 && ev.key.repeat == 0) {
+                        if (state.playMode) exitPlayMode();
+                        state.wallMode = !state.wallMode;
+                        state.entityMode = false;
+                    }
+                    if (ev.key.keysym.sym == SDLK_c && ev.key.repeat == 0) {
+                        if (ev.key.keysym.mod & KMOD_SHIFT) {
+                            const float sizes[] = {0.25f, 0.5f, 1.0f};
+                            size_t idx = 0;
+                            for (size_t i = 0; i < 3; ++i) {
+                                if (std::fabs(state.snapSize - sizes[i]) < 0.0001f) {
+                                    idx = (i + 1) % 3;
+                                    break;
+                                }
+                            }
+                            state.snapSize = sizes[idx];
+                            state.snapEnabled = true;
+                            std::printf("Snap size: %.2f\n", state.snapSize);
+                        } else {
+                            state.snapEnabled = !state.snapEnabled;
+                            std::printf("Snap: %s\n", state.snapEnabled ? "ON" : "OFF");
+                        }
+                    }
+                    if (ev.key.keysym.sym == SDLK_SPACE && ev.key.repeat == 0) {
+                        if (!state.playMode && state.entityMode) {
+                            state.entityBrush = nextEntityBrush(state.entityBrush);
+                            std::printf("Entity brush: %s\n", entityTypeName(state.entityBrush));
+                        }
+                    }
+                    if (ev.key.keysym.sym == SDLK_x && ev.key.repeat == 0) {
+                        if (!state.playMode) {
+                            deletePressed = true;
+                        }
+                    }
+#endif
+                    break;
+                case SDL_KEYUP:
+                    if (ev.key.keysym.sym == SDLK_LSHIFT || ev.key.keysym.sym == SDLK_RSHIFT) {
+                        shiftHeld = false;
+                    }
+                    break;
+                case SDL_MOUSEWHEEL: {
+#ifndef __SWITCH__
+                    if (!state.playMode) {
+                        float inc = (shiftHeld ? 1.02f : 1.1f);
+                        if (ev.wheel.y > 0) camera.zoom *= inc;
+                        if (ev.wheel.y < 0) camera.zoom /= inc;
+                        camera.zoom = std::clamp(camera.zoom, 0.1f, 32.0f);
+                    }
+#endif
+                    break;
+                }
+                case SDL_MOUSEBUTTONDOWN: {
+#ifndef __SWITCH__
+                    mouseX = ev.button.x;
+                    mouseY = ev.button.y;
+                    if (ev.button.button == SDL_BUTTON_LEFT) {
+                        if (state.playMode) {
+                            mouseBlock = true;
+                        } else {
+                            float wx, wy;
+                            worldFromMouse(ev.button.x, ev.button.y, winW, winH, camera, wx, wy);
+                            state.cursorRawX = wx;
+                            state.cursorRawY = wy;
+                            bool useSnap = state.snapEnabled && state.snapSize > 0.0f;
+                            if (useSnap) {
+                                state.cursorX = std::round(wx / state.snapSize) * state.snapSize;
+                                state.cursorY = std::round(wy / state.snapSize) * state.snapSize;
+                            } else {
+                                state.cursorX = wx;
+                                state.cursorY = wy;
+                            }
+                            placePressed = true;
+                        }
+                    } else if (ev.button.button == SDL_BUTTON_RIGHT) {
+                        if (state.playMode) {
+                            mouseFire = true;
+                        } else {
+                            float wx, wy;
+                            worldFromMouse(ev.button.x, ev.button.y, winW, winH, camera, wx, wy);
+                            if (state.entityMode) {
+                                const float entityHoverRadius = 0.3f;
+                                float bestEDist2 = entityHoverRadius * entityHoverRadius;
+                                int deleteEntity = -1;
+                                for (size_t i = 0; i < state.entities.size(); ++i) {
+                                    float dx = wx - state.entities[i].x;
+                                    float dy = wy - state.entities[i].y;
+                                    float d2 = dx * dx + dy * dy;
+                                    if (d2 <= bestEDist2) {
+                                        bestEDist2 = d2;
+                                        deleteEntity = static_cast<int>(i);
+                                    }
+                                }
+                                if (deleteEntity != -1) {
+                                    state.entities.erase(state.entities.begin() + deleteEntity);
+                                    if (state.selectedEntity == deleteEntity) state.selectedEntity = -1;
+                                    else if (state.selectedEntity > deleteEntity) --state.selectedEntity;
+                                    needRebuild = true;
+                                }
+                            } else {
+                                int deleteVertex = findVertexAt(state, wx, wy);
+                                if (deleteVertex != -1) {
+                                    state.vertices.erase(state.vertices.begin() + deleteVertex);
+                                    for (auto& line : state.lines) {
+                                        if (line.v1 == deleteVertex || line.v2 == deleteVertex) {
+                                            line.v1 = -1;
+                                            line.v2 = -1;
+                                        } else {
+                                            if (line.v1 > deleteVertex) --line.v1;
+                                            if (line.v2 > deleteVertex) --line.v2;
+                                        }
+                                    }
+                                    state.lines.erase(std::remove_if(state.lines.begin(), state.lines.end(),
+                                                                     [](const LineDef& l){ return l.v1 < 0 || l.v2 < 0; }),
+                                                      state.lines.end());
+                                    if (state.selectedVertex == deleteVertex) {
+                                        state.selectedVertex = -1;
+                                        state.wallMode = false;
+                                    } else if (state.selectedVertex > deleteVertex) {
+                                        --state.selectedVertex;
+                                    }
+                                    needRebuild = true;
+                                } else {
+                                    int deleteLine = findLineAt(state, wx, wy);
+                                    if (deleteLine != -1) {
+                                        state.lines.erase(state.lines.begin() + deleteLine);
+                                        needRebuild = true;
+                                    } else {
+                                        const float entityHoverRadius = 0.3f;
+                                        float bestEDist2 = entityHoverRadius * entityHoverRadius;
+                                        int deleteEntity = -1;
+                                        for (size_t i = 0; i < state.entities.size(); ++i) {
+                                            float dx = wx - state.entities[i].x;
+                                            float dy = wy - state.entities[i].y;
+                                            float d2 = dx * dx + dy * dy;
+                                            if (d2 <= bestEDist2) {
+                                                bestEDist2 = d2;
+                                                deleteEntity = static_cast<int>(i);
+                                            }
+                                        }
+                                        if (deleteEntity != -1) {
+                                            state.entities.erase(state.entities.begin() + deleteEntity);
+                                            if (state.selectedEntity == deleteEntity) state.selectedEntity = -1;
+                                            else if (state.selectedEntity > deleteEntity) --state.selectedEntity;
+                                            needRebuild = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+#endif
+                    break;
+                }
+                case SDL_MOUSEBUTTONUP: {
+#ifndef __SWITCH__
+                    if (state.playMode && ev.button.button == SDL_BUTTON_LEFT) {
+                        mouseBlock = false;
+                    }
+#endif
+                    break;
+                }
+                case SDL_MOUSEMOTION: {
+#ifndef __SWITCH__
+                    mouseX = ev.motion.x;
+                    mouseY = ev.motion.y;
+                    if (!state.playMode) {
+                        if ((ev.motion.state & SDL_BUTTON_MIDDLE) ||
+                            ((ev.motion.state & SDL_BUTTON_RIGHT) && shiftHeld)) {
+                            float dx = static_cast<float>(ev.motion.xrel);
+                            float dy = static_cast<float>(ev.motion.yrel);
+                            // Increase pan speed multiplier for easier dragging
+                            const float panMul = 3.0f;
+                            camera.offsetX -= (dx * panMul) / (0.5f * static_cast<float>(winW) * camera.zoom);
+                            camera.offsetY += (dy * panMul) / (0.5f * static_cast<float>(winH) * camera.zoom);
+                        } else {
+                            float wx, wy;
+                            worldFromMouse(ev.motion.x, ev.motion.y, winW, winH, camera, wx, wy);
+                            state.cursorRawX = wx;
+                            state.cursorRawY = wy;
+                            bool useSnap = state.snapEnabled && state.snapSize > 0.0f;
+                            if (useSnap) {
+                                state.cursorX = std::round(wx / state.snapSize) * state.snapSize;
+                                state.cursorY = std::round(wy / state.snapSize) * state.snapSize;
+                            } else {
+                                state.cursorX = wx;
+                                state.cursorY = wy;
+                            }
+                        }
+                    }
+#endif
+                    break;
+                }
             }
         }
 
+        const Uint8* keys = SDL_GetKeyboardState(nullptr);
+
         if (togglePlayPressed) {
-            state.playMode = !state.playMode;
-            state.wallMode = false;
-            state.selectedVertex = -1;
-            state.hoveredVertex = -1;
-            if (state.playMode) {
-                fpsCamera = Camera3D{};
-                bool foundStart = false;
-                for (const auto& e : state.entities) {
-                    if (e.type == EntityType::PlayerStart) {
-                        fpsCamera.x = e.x;
-                        fpsCamera.y = e.y;
-                        fpsCamera.z = 1.7f;
-                        foundStart = true;
-                        break;
-                    }
-                }
-                if (!foundStart) {
-                    fpsCamera.x = 4.0f;
-                    fpsCamera.y = 3.0f;
-                    fpsCamera.z = 1.7f;
-                }
-                state.enemies.clear();
-                for (const auto& e : state.entities) {
-                    if (e.type == EntityType::EnemyWizard || e.type == EntityType::EnemySpawn) {
-                        state.enemies.push_back({ e.x, e.y, 1.4f, 0.0f, true });
-                    }
-                }
-                state.items.clear();
-                for (const auto& e : state.entities) {
-                    if (e.type == EntityType::ItemPickup) {
-                        state.items.push_back({ e.x, e.y, 1.0f, e.type, true });
-                    }
-                }
-                state.projectiles.active.clear();
-                state.blocking = false;
-                state.blockFlashTimer = 0.0f;
-            }
+            if (state.playMode) exitPlayMode();
+            else enterPlayMode();
         }
 
         if (!state.playMode && controller) {
@@ -782,21 +1039,72 @@ int main(int argc, char** argv) {
 
             state.cursorRawX = newCursorRawX;
             state.cursorRawY = newCursorRawY;
-        } else if (state.playMode && controller) {
+        }
+
+        if (!state.playMode) {
+            const float panSpeed = 8.0f;
+            if (keys[SDL_SCANCODE_A]) camera.offsetX -= panSpeed * dt;
+            if (keys[SDL_SCANCODE_D]) camera.offsetX += panSpeed * dt;
+            if (keys[SDL_SCANCODE_W]) camera.offsetY += panSpeed * dt;
+            if (keys[SDL_SCANCODE_S]) camera.offsetY -= panSpeed * dt;
+
+            if (keys[SDL_SCANCODE_EQUALS] || keys[SDL_SCANCODE_KP_PLUS]) {
+                camera.zoom *= 1.0f + 1.5f * dt;
+            }
+            if (keys[SDL_SCANCODE_MINUS] || keys[SDL_SCANCODE_KP_MINUS]) {
+                camera.zoom *= 1.0f - 1.5f * dt;
+            }
+            camera.zoom = std::clamp(camera.zoom, 0.1f, 32.0f);
+        }
+
+        if (!state.playMode) {
+            SDL_GetMouseState(&mouseX, &mouseY);
+            float wx, wy;
+            worldFromMouse(mouseX, mouseY, winW, winH, camera, wx, wy);
+            state.cursorRawX = wx;
+            state.cursorRawY = wy;
+            bool useSnap = state.snapEnabled && state.snapSize > 0.0f;
+            if (useSnap) {
+                state.cursorX = std::round(wx / state.snapSize) * state.snapSize;
+                state.cursorY = std::round(wy / state.snapSize) * state.snapSize;
+            } else {
+                state.cursorX = wx;
+                state.cursorY = wy;
+            }
+        }
+
+        if (state.playMode) {
             const int16_t deadZone = 8000;
             const float invMax = 1.0f / 32767.0f;
+            float moveX = 0.0f, moveY = 0.0f, lookX = 0.0f, lookY = 0.0f;
+            bool controllerBlock = false;
 
-            int16_t moveXRaw = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX);
-            int16_t moveYRaw = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY);
-            int16_t lookXRaw = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTX);
-            int16_t lookYRaw = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTY);
+            if (controller) {
+                int16_t moveXRaw = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX);
+                int16_t moveYRaw = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY);
+                int16_t lookXRaw = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTX);
+                int16_t lookYRaw = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTY);
 
-            float moveX = (std::abs(moveXRaw) > deadZone) ? moveXRaw * invMax : 0.0f;
-            float moveY = (std::abs(moveYRaw) > deadZone) ? moveYRaw * invMax : 0.0f;
-            float lookX = (std::abs(lookXRaw) > deadZone) ? lookXRaw * invMax : 0.0f;
-            float lookY = (std::abs(lookYRaw) > deadZone) ? lookYRaw * invMax : 0.0f;
+                moveX += (std::abs(moveXRaw) > deadZone) ? moveXRaw * invMax : 0.0f;
+                moveY += (std::abs(moveYRaw) > deadZone) ? moveYRaw * invMax : 0.0f;
+                lookX += (std::abs(lookXRaw) > deadZone) ? lookXRaw * invMax : 0.0f;
+                lookY += (std::abs(lookYRaw) > deadZone) ? lookYRaw * invMax : 0.0f;
+                controllerBlock = SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER);
+            }
 
-            state.blocking = SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER);
+            if (keys[SDL_SCANCODE_A]) moveX -= 1.0f;
+            if (keys[SDL_SCANCODE_D]) moveX += 1.0f;
+            if (keys[SDL_SCANCODE_W]) moveY -= 1.0f;
+            if (keys[SDL_SCANCODE_S]) moveY += 1.0f;
+
+            int relX = 0, relY = 0;
+            SDL_GetRelativeMouseState(&relX, &relY);
+            const float mouseLookScale = 0.01f;
+            lookX += static_cast<float>(relX) * mouseLookScale;
+            lookY += static_cast<float>(relY) * mouseLookScale;
+
+            bool blockKey = keys[SDL_SCANCODE_SPACE];
+            state.blocking = controllerBlock || blockKey || mouseBlock;
 
             const float moveSpeed = 5.0f;
             const float lookSpeed = 2.5f;
@@ -819,6 +1127,12 @@ int main(int argc, char** argv) {
             if (!state.blocking) {
                 newX += (forwardX * moveForward + rightX * moveStrafe) * moveSpeed * dt;
                 newY += (forwardY * moveForward + rightY * moveStrafe) * moveSpeed * dt;
+            }
+
+            if (mouseFire) {
+                const float projSpeed = 6.0f;
+                spawnProjectile(state, fpsCamera.x, fpsCamera.y, fpsCamera.z,
+                                forwardX * projSpeed, forwardY * projSpeed, 0.0f, true);
             }
 
             const float radius = fpsCamera.radius;
@@ -1074,30 +1388,30 @@ int main(int argc, char** argv) {
         }
 
         if (!state.playMode && selectPressed) {
-            if (state.entityMode) {
-                if (state.hoveredEntity >= 0) {
-                    state.selectedEntity = state.hoveredEntity;
-                } else {
-                    state.selectedEntity = -1;
+        if (state.entityMode) {
+            if (state.hoveredEntity >= 0) {
+                state.selectedEntity = state.hoveredEntity;
+            } else {
+                state.selectedEntity = -1;
+            }
+        } else {
+            if (state.hoveredVertex != -1) {
+                if (!state.wallMode) {
+                    state.wallMode = true;
+                    state.selectedVertex = state.hoveredVertex;
+                } else if (state.selectedVertex != state.hoveredVertex) {
+                    LineDef newLine;
+                    newLine.v1 = state.selectedVertex;
+                    newLine.v2 = state.hoveredVertex;
+                    state.lines.push_back(newLine);
+                    state.selectedVertex = state.hoveredVertex;
+                    needRebuild = true;
                 }
             } else {
-                if (state.hoveredVertex != -1) {
-                    if (!state.wallMode) {
-                        state.wallMode = true;
-                        state.selectedVertex = state.hoveredVertex;
-                    } else if (state.selectedVertex != state.hoveredVertex) {
-                        LineDef newLine;
-                        newLine.v1 = state.selectedVertex;
-                        newLine.v2 = state.hoveredVertex;
-                        state.lines.push_back(newLine);
-                        state.selectedVertex = state.hoveredVertex;
-                        needRebuild = true;
-                    }
-                } else {
-                    state.wallMode = false;
-                    state.selectedVertex = -1;
-                }
+                state.wallMode = false;
+                state.selectedVertex = -1;
             }
+        }
         }
 
         if (!state.playMode) {
@@ -1154,7 +1468,6 @@ int main(int argc, char** argv) {
                 switch (e.type) {
                     case EntityType::PlayerStart: r = 0.1f; g = 0.8f; b = 0.1f; break;
                     case EntityType::EnemyWizard: r = 0.7f; g = 0.2f; b = 0.9f; break;
-                    case EntityType::EnemySpawn:  r = 0.9f; g = 0.1f; b = 0.1f; break;
                     case EntityType::ItemPickup:  r = 0.1f; g = 0.4f; b = 0.9f; break;
                 }
                 if (selected) { r = 1.0f; g = 0.5f; b = 0.0f; size *= 1.1f; }
@@ -1169,13 +1482,6 @@ int main(int argc, char** argv) {
                         renderer.drawLine2D(e.x, e.y + size, e.x + size, e.y, r, g, b);
                         renderer.drawLine2D(e.x + size, e.y, e.x, e.y - size, r, g, b);
                         renderer.drawLine2D(e.x, e.y - size, e.x - size, e.y, r, g, b);
-                        break;
-                    }
-                    case EntityType::EnemySpawn: {
-                        float h = size;
-                        renderer.drawLine2D(e.x - size, e.y - size, e.x, e.y + h, r, g, b);
-                        renderer.drawLine2D(e.x, e.y + h, e.x + size, e.y - size, r, g, b);
-                        renderer.drawLine2D(e.x + size, e.y - size, e.x - size, e.y - size, r, g, b);
                         break;
                     }
                     case EntityType::ItemPickup: {
@@ -1241,6 +1547,7 @@ int main(int argc, char** argv) {
             if (state.blockFlashTimer > 0.0f) {
                 renderer.drawBillboard3D(fpsCamera, fpsCamera.x, fpsCamera.y, fpsCamera.z + 0.2f, 1.3f, texBlockFlash, 1.0f, 1.0f, 1.0f);
             }
+            renderer.drawEditorHUD(state, winW, winH);
             renderer.endFrame(window);
         }
     }
@@ -1252,11 +1559,9 @@ int main(int argc, char** argv) {
     SDL_GL_DeleteContext(glCtx);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    if (g_nxlinkSock >= 0) {
-        close(g_nxlinkSock);
-        socketExit();
-        g_nxlinkSock = -1;
-    }
+    PlatformShutdown();
+#ifdef __SWITCH__
     consoleExit(NULL);
+#endif
     return 0;
 }
