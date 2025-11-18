@@ -28,7 +28,6 @@ jobs:
 
       - name: Build WebAssembly target
         run: |
-          source "$EMSDK/emsdk_env.sh"
           em++ -v
           make wasm
 
