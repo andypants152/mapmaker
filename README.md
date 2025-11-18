@@ -47,3 +47,8 @@ make wasm
 The WASM build drops `mapmaker.html/.js/.wasm/.data` into `web/public/` and the local Express server in `web/server.js` serves them at http://localhost:1234/mapmaker.html.
 
 Works best with a gamepad; there is no keyboard/mouse path wired up at the moment.
+
+## GitHub Pages
+- A workflow at `.github/workflows/gh-pages.yml` builds the WASM target with `make wasm` and publishes `mapmaker/web/public` to GitHub Pages.
+- In the repository settings, set Pages to use the GitHub Actions source, then run the workflow (on push to `main` or manually) to deploy.
+- The deployed site serves `mapmaker.html`, with all supporting `.js/.wasm/.data` files beside it, so it works from a project subpath without extra configuration.
