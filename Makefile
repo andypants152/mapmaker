@@ -1,4 +1,4 @@
-# Simple cross-platform build: desktop (SDL2 + OpenGL) and Nintendo Switch (devkitA64)
+# Simple cross-platform build: linux/desktop (SDL2 + OpenGL) and Nintendo Switch (devkitA64)
 
 TARGET := mapmaker
 SRC_DIR := source
@@ -54,11 +54,11 @@ endif
 DESKTOP_DATA_DIR := data
 DESKTOP_DATA_SRC := $(ROMFS_DIR)/data
 
-.PHONY: all clean desktop switch desktop_data check_devkit windows wasm
+.PHONY: all clean linux switch desktop_data check_devkit windows wasm
 
-all: desktop
+all: switch
 
-desktop: desktop_data $(DESKTOP_BIN)
+linux: desktop_data $(DESKTOP_BIN)
 
 desktop_data:
 	@mkdir -p $(DESKTOP_DATA_DIR)

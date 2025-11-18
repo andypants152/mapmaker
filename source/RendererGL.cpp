@@ -2,11 +2,18 @@
 #include "RendererGL.h"
 #include "EditorState.h"
 #include "Mesh3D.h"
+#include "Platform.h"
+#define STBI_NO_STDIO
+#define STBI_ONLY_PNG
+#define STBI_NO_SIMD
+#define STBI_NO_THREAD_LOCALS
+#define STBI_NO_LINEAR
 #include "stb_image.h"
 #include <cmath>
 #include <cstdio>
 #include <vector>
 #include <array>
+#include <limits>
 #include <cctype>
 #include <cstring>
 
@@ -180,30 +187,8 @@ static GLuint createFallbackTexture() {
 }
 
 GLuint loadTextureFromPNG(const char* path) {
-    FILE* fp = fopen(path, "rb");
-    if (!fp) {
-        std::printf("Failed to open texture: %s (using fallback)\n", path);
-        return createFallbackTexture();
-    }
-
-    if (fseek(fp, 0, SEEK_END) != 0) {
-        fclose(fp);
-        std::printf("Failed to seek texture: %s (using fallback)\n", path);
-        return createFallbackTexture();
-    }
-
-    long len = ftell(fp);
-    if (len <= 0) {
-        fclose(fp);
-        std::printf("Failed to get size for texture: %s (using fallback)\n", path);
-        return createFallbackTexture();
-    }
-
-    rewind(fp);
-    std::vector<unsigned char> fileData(static_cast<size_t>(len));
-    size_t readBytes = fread(fileData.data(), 1, static_cast<size_t>(len), fp);
-    fclose(fp);
-    if (readBytes != static_cast<size_t>(len)) {
+    std::vector<unsigned char> fileData;
+    if (!PlatformReadFile(path, fileData) || fileData.empty()) {
         std::printf("Failed to read texture: %s (using fallback)\n", path);
         return createFallbackTexture();
     }
@@ -211,9 +196,15 @@ GLuint loadTextureFromPNG(const char* path) {
     int width = 0;
     int height = 0;
     int comp = 0;
-    stbi_uc* pixels = stbi_load_from_memory(fileData.data(), static_cast<int>(fileData.size()), &width, &height, &comp, 4);
+    if (fileData.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        std::printf("Texture too large to load: %s (using fallback)\n", path);
+        return createFallbackTexture();
+    }
+
+    stbi_uc* pixels = stbi_load_from_memory(fileData.data(), static_cast<int>(fileData.size()), &width, &height, &comp, STBI_rgb_alpha);
     if (!pixels) {
-        std::printf("stbi_load_from_memory failed for %s (using fallback)\n", path);
+        const char* reason = stbi_failure_reason();
+        std::printf("stbi_load_from_memory failed for %s: %s (using fallback)\n", path, reason ? reason : "unknown");
         return createFallbackTexture();
     }
 

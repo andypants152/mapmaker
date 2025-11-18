@@ -106,8 +106,8 @@ static void worldFromMouse(int mouseX, int mouseY, int winW, int winH, const Cam
                            float& worldX, float& worldY) {
     const float halfW = static_cast<float>(winW) * 0.5f;
     const float halfH = static_cast<float>(winH) * 0.5f;
-    worldX = (static_cast<float>(mouseX) - halfW) / (halfW * cam.zoom) + cam.offsetX;
-    worldY = (halfH - static_cast<float>(mouseY)) / (halfH * cam.zoom) + cam.offsetY;
+    worldX = (halfW - static_cast<float>(mouseX)) / (halfW * cam.zoom) + cam.offsetX;
+    worldY = (static_cast<float>(mouseY) - halfH) / (halfH * cam.zoom) + cam.offsetY;
 }
 
 struct Vec2 {
@@ -669,8 +669,8 @@ int main(int argc, char** argv) {
     Camera3D fpsCamera;
     std::string dataPath = PlatformDataPath();
     // Use the higher-detail panels/lights for walls/floors so they are visible in all builds.
-    GLuint texWall = loadTextureFromPNG((dataPath + "tech_panel.png").c_str());
-    GLuint texFloor = loadTextureFromPNG((dataPath + "light.png").c_str());
+    GLuint texWall = loadTextureFromPNG((dataPath + "wall.png").c_str());
+    GLuint texFloor = loadTextureFromPNG((dataPath + "floor.png").c_str());
     GLuint texCeil = loadTextureFromPNG((dataPath + "ceiling.png").c_str());
     renderer.setTextures(texFloor, texWall, texCeil);
     GLuint texEnemySprite = loadTextureFromPNG((dataPath + "enemy_wizard.png").c_str());
@@ -1167,8 +1167,8 @@ int main(int argc, char** argv) {
             int relX = 0, relY = 0;
             SDL_GetRelativeMouseState(&relX, &relY);
             const float mouseLookScale = 0.01f;
-            lookX += static_cast<float>(relX) * mouseLookScale;
-            lookY += static_cast<float>(relY) * mouseLookScale;
+            lookX -= static_cast<float>(relX) * mouseLookScale;
+            lookY -= static_cast<float>(relY) * mouseLookScale;
 
             bool blockKey = keys[SDL_SCANCODE_SPACE];
             state.blocking = controllerBlock || blockKey || mouseBlock;

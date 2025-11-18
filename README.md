@@ -20,9 +20,9 @@ Controller-driven mapmaker/playtest tool for a simple Doom-like prototype. Runs 
 - Minus/Back: toggle playtest mode; Plus/Start: quit.
 
 ## Building
-Desktop (SDL2 + OpenGL + GLAD):
+Desktop/Linux (SDL2 + OpenGL + GLAD):
 ```sh
-make desktop
+make linux
 ./mapmaker_desktop
 ```
 

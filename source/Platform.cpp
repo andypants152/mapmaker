@@ -8,6 +8,7 @@
 #include <SDL.h>
 #endif
 #include <cstdio>
+#include <fstream>
 
 #ifdef __SWITCH__
 #include <switch.h>
@@ -90,4 +91,30 @@ std::string PlatformDataPath() {
     path += "data/";
     return path;
 #endif
+}
+
+bool PlatformReadFile(const char* path, std::vector<unsigned char>& outData) {
+    outData.clear();
+    if (!path || path[0] == '\0') {
+        return false;
+    }
+
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return false;
+    }
+
+    std::streamsize size = file.tellg();
+    if (size < 0) {
+        return false;
+    }
+
+    outData.resize(static_cast<size_t>(size));
+    file.seekg(0, std::ios::beg);
+    if (!file.read(reinterpret_cast<char*>(outData.data()), size)) {
+        outData.clear();
+        return false;
+    }
+
+    return true;
 }
