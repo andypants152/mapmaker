@@ -27,7 +27,10 @@ jobs:
           version: latest
 
       - name: Build WebAssembly target
-        run: make wasm
+        run: |
+          source "$EMSDK/emsdk_env.sh"
+          em++ -v
+          make wasm
 
       - name: Upload static site
         uses: actions/upload-pages-artifact@v3
