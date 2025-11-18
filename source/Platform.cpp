@@ -1,6 +1,12 @@
 #include "Platform.h"
 
+#if __has_include(<SDL2/SDL.h>)
 #include <SDL2/SDL.h>
+#elif __has_include(<SDL3/SDL.h>)
+#include <SDL3/SDL.h>
+#else
+#include <SDL.h>
+#endif
 #include <cstdio>
 
 #ifdef __SWITCH__
@@ -66,6 +72,22 @@ std::string PlatformDataPath() {
 #ifdef __SWITCH__
     return "romfs:/data/";
 #else
-    return "data/";
+    const char* base = SDL_GetBasePath();
+    std::string path;
+    if (base) {
+        path = base;
+        SDL_free((void*)base);
+    }
+
+#ifdef __EMSCRIPTEN__
+    if (path.empty()) path = "/";
+#else
+    if (path.empty()) path = "./";
+#endif
+    if (!path.empty() && path.back() != '/' && path.back() != '\\') {
+        path.push_back('/');
+    }
+    path += "data/";
+    return path;
 #endif
 }

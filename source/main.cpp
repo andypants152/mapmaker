@@ -1,14 +1,26 @@
 // main.cpp
+#if __has_include(<SDL2/SDL.h>)
 #include <SDL2/SDL.h>
+#elif __has_include(<SDL3/SDL.h>)
+#include <SDL3/SDL.h>
+#else
+#include <SDL.h>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <map>
 #include <set>
+#include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <utility>
 #include <vector>
 #include <cstdio>
+
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h>
+#endif
 
 #ifdef __SWITCH__
 #include <switch.h>
@@ -68,19 +80,26 @@ static bool loopsEqual(const std::vector<int>& a, const std::vector<int>& b) {
         return false;
     if (a.empty())
         return true;
-    const size_t count = a.size();
-    for (size_t offset = 0; offset < count; ++offset) {
-        bool match = true;
-        for (size_t i = 0; i < count; ++i) {
-            if (a[i] != b[(i + offset) % count]) {
-                match = false;
-                break;
+    auto matches = [&](const std::vector<int>& target) {
+        const size_t count = a.size();
+        for (size_t offset = 0; offset < count; ++offset) {
+            bool match = true;
+            for (size_t i = 0; i < count; ++i) {
+                if (a[i] != target[(i + offset) % count]) {
+                    match = false;
+                    break;
+                }
             }
+            if (match)
+                return true;
         }
-        if (match)
-            return true;
-    }
-    return false;
+        return false;
+    };
+
+    if (matches(b))
+        return true;
+    std::vector<int> reversed(b.rbegin(), b.rend());
+    return matches(reversed);
 }
 
 static void worldFromMouse(int mouseX, int mouseY, int winW, int winH, const Camera2D& cam,
@@ -148,7 +167,8 @@ static EntityType nextEntityBrush(EntityType t) {
     switch (t) {
         case EntityType::PlayerStart: return EntityType::EnemyWizard;
         case EntityType::EnemyWizard: return EntityType::ItemPickup;
-        case EntityType::ItemPickup:  return EntityType::PlayerStart;
+        case EntityType::ItemPickup:  return EntityType::Door;
+        case EntityType::Door:        return EntityType::PlayerStart;
     }
     return EntityType::PlayerStart;
 }
@@ -158,6 +178,7 @@ static const char* entityTypeName(EntityType t) {
         case EntityType::PlayerStart: return "PlayerStart";
         case EntityType::EnemyWizard: return "EnemyWizard";
         case EntityType::ItemPickup:  return "ItemPickup";
+        case EntityType::Door:        return "Door";
     }
     return "Unknown";
 }
@@ -168,83 +189,71 @@ static void spawnProjectile(EditorState& state, float x, float y, float z,
     state.projectiles.active.push_back(p);
 }
 
+static std::vector<std::vector<int>> findClosedLoops(const EditorState& state);
+
 static void buildDefaultMap(EditorState& state) {
     state.vertices.clear();
     state.lines.clear();
     state.entities.clear();
+    state.sectors.clear();
+
+    const std::vector<std::pair<float, float>> verts = {
+        {0.0f, 0.0f},    // 0 bottom left
+        {0.0f, 10.0f},   // 1 top left
+        {10.0f, 10.0f},  // 2 top entry start
+        {10.0f, 7.0f},   // 3 vertical hall cutout (top)
+        {12.0f, 7.0f},   // 4 vertical hall cutout (top)
+        {12.0f, 10.0f},  // 5 back to top edge
+        {36.0f, 11.0f},  // 6 slight rise toward right end
+        {48.0f, 11.0f},  // 7 far top right
+        {48.0f, -1.0f},  // 8 far bottom right
+        {36.0f, -1.0f},  // 9 slight drop near right end
+        {34.0f, 0.0f},   // 10 angled return
+        {24.0f, 0.0f},   // 11 mid bottom
+        {24.0f, 3.0f},   // 12 bottom hall cutout top
+        {22.0f, 3.0f},   // 13 bottom hall cutout top (left)
+        {22.0f, 0.0f},   // 14 return down
+        {12.0f, 0.0f},   // 15 bottom near entry
+        {12.0f, 3.0f},   // 16 bottom hall cutout top (right)
+        {10.0f, 3.0f},   // 17 bottom hall cutout top (left)
+        {10.0f, 0.0f},   // 18 close to origin along bottom
+    };
+
+    for (const auto& v : verts) {
+        state.vertices.push_back(v);
+    }
 
     auto addLine = [&](uint16_t a, uint16_t b) { state.lines.push_back({a, b}); };
-
-    // Room1 (gap on right y 4..6)
-    uint16_t v0 = state.vertices.size(); state.vertices.push_back({0.0f, 0.0f});
-    uint16_t v1 = state.vertices.size(); state.vertices.push_back({10.0f, 0.0f});
-    uint16_t v2 = state.vertices.size(); state.vertices.push_back({10.0f, 4.0f});
-    uint16_t v3 = state.vertices.size(); state.vertices.push_back({10.0f, 6.0f});
-    uint16_t v4 = state.vertices.size(); state.vertices.push_back({10.0f,10.0f});
-    uint16_t v5 = state.vertices.size(); state.vertices.push_back({0.0f,10.0f});
-    addLine(v0, v1); addLine(v1, v2); addLine(v3, v4); addLine(v4, v5); addLine(v5, v0);
-
-    // Corridor1 (10..12,4..6)
-    uint16_t c1a = v2;
-    uint16_t c1b = state.vertices.size(); state.vertices.push_back({12.0f, 4.0f});
-    uint16_t c1c = state.vertices.size(); state.vertices.push_back({12.0f, 6.0f});
-    uint16_t c1d = v3;
-    addLine(c1a, c1b); addLine(c1b, c1c); addLine(c1c, c1d);
-
-    // Room2 (gap on left/right y 4..6)
-    uint16_t r2a = state.vertices.size(); state.vertices.push_back({12.0f, 0.0f});
-    uint16_t r2b = state.vertices.size(); state.vertices.push_back({22.0f, 0.0f});
-    uint16_t r2c = state.vertices.size(); state.vertices.push_back({22.0f, 4.0f});
-    uint16_t r2d = state.vertices.size(); state.vertices.push_back({22.0f, 6.0f});
-    uint16_t r2e = state.vertices.size(); state.vertices.push_back({22.0f,10.0f});
-    uint16_t r2f = state.vertices.size(); state.vertices.push_back({12.0f,10.0f});
-    addLine(r2a, r2b); addLine(r2b, r2c); addLine(r2d, r2e); addLine(r2e, r2f); addLine(r2f, r2a);
-    addLine(r2c, c1b); addLine(c1c, r2d);
-
-    // Corridor2 (22..24,4..6)
-    uint16_t c2a = r2c;
-    uint16_t c2b = state.vertices.size(); state.vertices.push_back({24.0f, 4.0f});
-    uint16_t c2c = state.vertices.size(); state.vertices.push_back({24.0f, 6.0f});
-    uint16_t c2d = r2d;
-    addLine(c2a, c2b); addLine(c2b, c2c); addLine(c2c, c2d);
-
-    // Room3 (gap on left/right y 4..6)
-    uint16_t r3a = state.vertices.size(); state.vertices.push_back({24.0f, 0.0f});
-    uint16_t r3b = state.vertices.size(); state.vertices.push_back({34.0f, 0.0f});
-    uint16_t r3c = state.vertices.size(); state.vertices.push_back({34.0f, 4.0f});
-    uint16_t r3d = state.vertices.size(); state.vertices.push_back({34.0f, 6.0f});
-    uint16_t r3e = state.vertices.size(); state.vertices.push_back({34.0f,10.0f});
-    uint16_t r3f = state.vertices.size(); state.vertices.push_back({24.0f,10.0f});
-    addLine(r3a, r3b); addLine(r3b, r3c); addLine(r3d, r3e); addLine(r3e, r3f); addLine(r3f, r3a);
-    addLine(r3c, c2b); addLine(c2c, r3d);
-
-    // Corridor3 (34..36,4..6)
-    uint16_t c3a = r3c;
-    uint16_t c3b = state.vertices.size(); state.vertices.push_back({36.0f, 4.0f});
-    uint16_t c3c = state.vertices.size(); state.vertices.push_back({36.0f, 6.0f});
-    uint16_t c3d = r3d;
-    addLine(c3a, c3b); addLine(c3b, c3c); addLine(c3c, c3d);
-
-    // Tie corridor3 top/bottom edges across width to avoid diagonal fills
-    addLine(c3a, c3d);
-
-    // Room4 (gap on left y4..6)
-    uint16_t r4a = state.vertices.size(); state.vertices.push_back({36.0f,-1.0f});
-    uint16_t r4b = state.vertices.size(); state.vertices.push_back({48.0f,-1.0f});
-    uint16_t r4c = state.vertices.size(); state.vertices.push_back({48.0f,11.0f});
-    uint16_t r4d = state.vertices.size(); state.vertices.push_back({36.0f,11.0f});
-    addLine(r4a, r4b); addLine(r4b, r4c); addLine(r4c, r4d);
-    addLine(r4a, c3b); addLine(c3c, r4d);
-    // Close the right wall fully to avoid diagonals
-    addLine(c3b, c3c);
-
+    for (uint16_t i = 0; i < static_cast<uint16_t>(state.vertices.size()); ++i) {
+        uint16_t next = static_cast<uint16_t>((i + 1) % state.vertices.size());
+        addLine(i, next);
+    }
     // Entities
     state.entities.push_back({5.0f, 5.0f, EntityType::PlayerStart});
-    state.entities.push_back({17.0f, 5.0f, EntityType::EnemyWizard});
+    state.entities.push_back({17.0f, 5.5f, EntityType::EnemyWizard});
     state.entities.push_back({29.0f, 5.0f, EntityType::ItemPickup});
-    state.entities.push_back({39.0f, 5.0f, EntityType::EnemyWizard});
+    state.entities.push_back({39.0f, 5.5f, EntityType::EnemyWizard});
     state.entities.push_back({43.0f, 3.0f, EntityType::EnemyWizard});
     state.entities.push_back({43.0f, 7.0f, EntityType::EnemyWizard});
+    // Doors at corridor midpoints
+    state.entities.push_back({11.0f, 5.0f, EntityType::Door});
+    state.entities.push_back({23.0f, 5.0f, EntityType::Door});
+    state.entities.push_back({35.0f, 5.0f, EntityType::Door});
+
+    // Single sector covering the whole footprint
+    Sector s;
+    s.vertices.resize(state.vertices.size());
+    for (size_t i = 0; i < state.vertices.size(); ++i) {
+        s.vertices[i] = static_cast<int>(i);
+    }
+    float area = 0.0f;
+    for (size_t i = 0; i < s.vertices.size(); ++i) {
+        const auto& p0 = state.vertices[s.vertices[i]];
+        const auto& p1 = state.vertices[s.vertices[(i + 1) % s.vertices.size()]];
+        area += p0.first * p1.second - p1.first * p0.second;
+    }
+    s.clockwise = (area < 0.0f);
+    state.sectors.push_back(std::move(s));
 }
 
 static bool earClip(const std::vector<Vec2>& poly, const std::vector<uint16_t>& localIdx, std::vector<uint16_t>& out) {
@@ -417,18 +426,12 @@ static void rebuildWorldMesh(const EditorState& state, Mesh3D& mesh,
                 mesh.vertices.size() / 3,
                 mesh.indices.size() / 3);
 }
-static void buildSectorsFromLinedefs(EditorState& state) {
-    state.sectors.clear();
+static std::vector<std::vector<int>> findClosedLoops(const EditorState& state) {
+    std::vector<std::vector<int>> loops;
     if (state.vertices.size() < 3 || state.lines.size() < 3)
-        return;
+        return loops;
 
-    std::vector<std::vector<int>> adjacency(state.vertices.size());
-    std::map<std::pair<int, int>, bool> edgeUsed;
-
-    auto normKey = [](int a, int b) {
-        return std::make_pair(std::min(a, b), std::max(a, b));
-    };
-
+    std::unordered_map<int, std::vector<int>> adjacency;
     for (const auto& line : state.lines) {
         if (line.v1 < 0 || line.v2 < 0 ||
             line.v1 >= static_cast<int>(state.vertices.size()) ||
@@ -438,81 +441,115 @@ static void buildSectorsFromLinedefs(EditorState& state) {
         }
         adjacency[line.v1].push_back(line.v2);
         adjacency[line.v2].push_back(line.v1);
-        edgeUsed[normKey(line.v1, line.v2)] = false;
     }
 
-    for (const auto& kv : edgeUsed) {
-        int start = kv.first.first;
-        int next = kv.first.second;
-        if (edgeUsed[kv.first])
-            continue;
+    if (adjacency.empty())
+        return loops;
 
-        std::vector<int> loop;
-        std::vector<std::pair<int, int>> usedEdges;
-        loop.push_back(start);
-        loop.push_back(next);
-        edgeUsed[kv.first] = true;
-        usedEdges.push_back(kv.first);
-        int prev = start;
-        int curr = next;
-        bool closed = false;
+    auto angleBetween = [&](int from, int to, int ref) {
+        const auto& pFrom = state.vertices[from];
+        const auto& pTo = state.vertices[to];
+        const auto& pRef = state.vertices[ref];
+        float ax = pTo.first - pFrom.first;
+        float ay = pTo.second - pFrom.second;
+        float bx = pRef.first - pFrom.first;
+        float by = pRef.second - pFrom.second;
+        float aAng = std::atan2(ay, ax);
+        float bAng = std::atan2(by, bx);
+        float diff = bAng - aAng;
+        while (diff <= -3.14159265f) diff += 6.2831853f;
+        while (diff >   3.14159265f) diff -= 6.2831853f;
+        return diff;
+    };
 
-        while (true) {
-            if (curr == start) { closed = true; break; }
-            bool advanced = false;
-            for (int neigh : adjacency[curr]) {
-                if (neigh == prev) continue;
-                auto k = normKey(curr, neigh);
-                if (edgeUsed.find(k) == edgeUsed.end() || edgeUsed[k]) continue;
-                edgeUsed[k] = true;
-                usedEdges.push_back(k);
-                loop.push_back(neigh);
+    std::unordered_set<long long> directedUsed;
+    auto dirKey = [](int a, int b) {
+        return (static_cast<long long>(a) << 32) | static_cast<unsigned>(b);
+    };
+
+    for (const auto& kv : adjacency) {
+        int start = kv.first;
+        for (int next : kv.second) {
+            long long dk = dirKey(start, next);
+            if (directedUsed.count(dk)) continue;
+
+            std::vector<int> loop;
+            loop.push_back(start);
+            loop.push_back(next);
+            directedUsed.insert(dk);
+            int prev = start;
+            int curr = next;
+            bool closed = false;
+
+            while (true) {
+                if (curr == start) {
+                    closed = true;
+                    break;
+                }
+                const auto itNeigh = adjacency.find(curr);
+                if (itNeigh == adjacency.end() || itNeigh->second.empty()) break;
+
+                float bestAngle = 1e9f;
+                int bestNext = -1;
+                for (int neigh : itNeigh->second) {
+                    if (neigh == curr) continue;
+                    float diff = angleBetween(curr, prev, neigh);
+                    if (diff <= 0.0f) diff += 6.2831853f;
+                    if (diff < bestAngle) {
+                        bestAngle = diff;
+                        bestNext = neigh;
+                    }
+                }
+
+                if (bestNext < 0) break;
+                long long nk = dirKey(curr, bestNext);
+                if (directedUsed.count(nk)) {
+                    break;
+                }
+                directedUsed.insert(nk);
+                loop.push_back(bestNext);
                 prev = curr;
-                curr = neigh;
-                advanced = true;
-                break;
+                curr = bestNext;
             }
-            if (!advanced) break;
-        }
 
-        if (!closed || loop.size() < 3) {
-            for (auto& e : usedEdges) edgeUsed[e] = false;
-            continue;
-        }
+            if (!closed) continue;
+            if (loop.size() < 3) continue;
+            if (loop.front() != loop.back()) loop.push_back(loop.front());
+            loop.pop_back();
 
-        // dedup closing vertex if present
-        if (loop.front() == loop.back()) loop.pop_back();
-        // unique check
-        std::set<int> uniq(loop.begin(), loop.end());
-        if (uniq.size() < 3) {
-            for (auto& e : usedEdges) edgeUsed[e] = false;
-            continue;
-        }
+            std::set<int> uniq(loop.begin(), loop.end());
+            if (uniq.size() < 3) continue;
 
-        // Preserve loop order; ensure clockwise orientation
-        std::vector<int> ordered = loop;
-        float area = 0.0f;
-        for (size_t i = 0; i < ordered.size(); ++i) {
-            const auto& a = state.vertices[ordered[i]];
-            const auto& b = state.vertices[ordered[(i + 1) % ordered.size()]];
-            area += a.first * b.second - b.first * a.second;
-        }
-        if (area > 0.0f) {
-            std::reverse(ordered.begin(), ordered.end());
-        }
+            std::vector<Vec2> poly;
+            poly.reserve(loop.size());
+            bool validIdx = true;
+            for (int idx : loop) {
+                if (idx < 0 || idx >= static_cast<int>(state.vertices.size())) {
+                    validIdx = false;
+                    break;
+                }
+                poly.push_back({state.vertices[idx].first, state.vertices[idx].second});
+            }
+            if (!validIdx) continue;
+            if (polygonSelfIntersects(poly)) {
+                std::printf("Invalid polygon: self-intersects or malformed\n");
+                continue;
+            }
 
-        // self-intersection check
-        std::vector<Vec2> poly;
-        for (int idx : ordered) poly.push_back({state.vertices[idx].first, state.vertices[idx].second});
-        if (polygonSelfIntersects(poly)) {
-            std::printf("Skipping self-intersecting sector\n");
-            continue;
-        }
+            bool duplicate = false;
+            for (const auto& existing : loops) {
+                if (loopsEqual(existing, loop)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
 
-        Sector s;
-        s.vertices = ordered;
-        state.sectors.push_back(std::move(s));
+            loops.push_back(std::move(loop));
+        }
     }
+
+    return loops;
 }
 
 int main(int argc, char** argv) {
@@ -534,10 +571,15 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    // Attributes for GLES2
+    // Attributes for GLES; tweak for WebGL2 on Emscripten.
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+#ifdef __EMSCRIPTEN__
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#else
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#endif
 
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_RED_SIZE,   8);
@@ -598,14 +640,21 @@ int main(int argc, char** argv) {
     camera.offsetY = 3.0f;
 
     SDL_GameController* controller = nullptr;
-    for (int i = 0; i < SDL_NumJoysticks(); ++i) {
-        if (SDL_IsGameController(i)) {
-            controller = SDL_GameControllerOpen(i);
-            if (controller) {
-                break;
+    auto tryOpenController = [&]() {
+        if (controller)
+            return;
+        for (int i = 0; i < SDL_NumJoysticks(); ++i) {
+            if (SDL_IsGameController(i)) {
+                SDL_GameController* opened = SDL_GameControllerOpen(i);
+                if (opened) {
+                    controller = opened;
+                    std::printf("Controller connected: %s\n", SDL_GameControllerName(controller));
+                    break;
+                }
             }
         }
-    }
+    };
+    tryOpenController();
     if (!controller) {
         std::printf("No SDL controller detected; keyboard/mouse controls active on desktop.\n");
     }
@@ -616,12 +665,12 @@ int main(int argc, char** argv) {
     state.cursorRawY = 3.0f;
     state.cursorX    = 4.0f;
     state.cursorY    = 3.0f;
-    buildSectorsFromLinedefs(state);
     rebuildWorldMesh(state, state.worldMesh);
     Camera3D fpsCamera;
     std::string dataPath = PlatformDataPath();
-    GLuint texWall = loadTextureFromPNG((dataPath + "wall.png").c_str());
-    GLuint texFloor = loadTextureFromPNG((dataPath + "floor.png").c_str());
+    // Use the higher-detail panels/lights for walls/floors so they are visible in all builds.
+    GLuint texWall = loadTextureFromPNG((dataPath + "tech_panel.png").c_str());
+    GLuint texFloor = loadTextureFromPNG((dataPath + "light.png").c_str());
     GLuint texCeil = loadTextureFromPNG((dataPath + "ceiling.png").c_str());
     renderer.setTextures(texFloor, texWall, texCeil);
     GLuint texEnemySprite = loadTextureFromPNG((dataPath + "enemy_wizard.png").c_str());
@@ -629,6 +678,7 @@ int main(int argc, char** argv) {
     GLuint texItemHealth = loadTextureFromPNG((dataPath + "item_health.png").c_str());
     GLuint texItemMana   = loadTextureFromPNG((dataPath + "item_mana.png").c_str());
     GLuint texBlockFlash = loadTextureFromPNG((dataPath + "block_flash.png").c_str());
+    GLuint texDoorSprite = loadTextureFromPNG((dataPath + "metal_door.png").c_str());
     renderer.setBillboardTextures(texEnemySprite, texProjSprite);
     renderer.setItemTextures(texItemHealth, texItemMana);
     renderer.setEffectTextures(texBlockFlash);
@@ -670,6 +720,12 @@ int main(int argc, char** argv) {
                 state.items.push_back({ e.x, e.y, 1.0f, e.type, true });
             }
         }
+        state.doors.clear();
+        for (const auto& e : state.entities) {
+            if (e.type == EntityType::Door) {
+                state.doors.push_back({ e.x, e.y, 2.0f, 3.0f, 0.0f, false, false, true });
+            }
+        }
         state.projectiles.active.clear();
         state.blocking = false;
         state.blockFlashTimer = 0.0f;
@@ -686,6 +742,7 @@ int main(int argc, char** argv) {
         state.blockFlashTimer = 0.0f;
         state.projectiles.active.clear();
         state.enemies.clear();
+        state.doors.clear();
         fpsCamera = Camera3D{};
 #ifndef __SWITCH__
         SDL_SetRelativeMouseMode(SDL_FALSE);
@@ -698,26 +755,55 @@ int main(int argc, char** argv) {
     int mouseX = 0;
     int mouseY = 0;
     uint64_t lastTicks = PlatformTicks();
+    std::vector<int> loopHighlight;
+    float loopHighlightTimer = 0.0f;
 
     // Main loop; PlatformRunning handles Switch appletMainLoop or desktop quit events
-    while (running && PlatformRunning()) {
+    auto frame = [&]() {
+        if (!PlatformRunning()) {
+            running = false;
+#ifdef __EMSCRIPTEN__
+            emscripten_cancel_main_loop();
+#endif
+            return;
+        }
+
         uint64_t now = PlatformTicks();
         float dt = static_cast<float>(now - lastTicks) / 1000.0f;
         lastTicks = now;
+        if (loopHighlightTimer > 0.0f) {
+            loopHighlightTimer -= dt;
+            if (loopHighlightTimer < 0.0f) {
+                loopHighlightTimer = 0.0f;
+            }
+            if (loopHighlightTimer == 0.0f) {
+                loopHighlight.clear();
+            }
+        }
 
         bool selectPressed = false; // logical "A" action (wall mode)
         bool placePressed = false;  // logical "B" action (place vertex)
         bool deletePressed = false;
+        bool createSectorPressed = false;
         bool togglePlayPressed = false;
         bool needRebuild = false;
         bool mouseFire = false;
         bool mouseBlock = false;
+
+        // Attempt to hot-plug a controller each frame (needed for web Gamepad API).
+        tryOpenController();
 
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             switch (ev.type) {
                 case SDL_QUIT:
                     running = false;
+#ifndef __SWITCH__
+                    SDL_SetRelativeMouseMode(SDL_FALSE);
+#endif
+                    if (state.playMode) {
+                        exitPlayMode();
+                    }
                     break;
                 case SDL_WINDOWEVENT:
                     if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
@@ -740,6 +826,9 @@ int main(int argc, char** argv) {
                     if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_X) {
                         deletePressed = true;
                     }
+                    if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_Y) {
+                        createSectorPressed = true;
+                    }
                     if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
                         togglePlayPressed = true;
                     }
@@ -757,12 +846,27 @@ int main(int argc, char** argv) {
                         state.hoveredEntity = -1;
                     }
                     break;
+                case SDL_CONTROLLERDEVICEADDED:
+                    tryOpenController();
+                    break;
+                case SDL_CONTROLLERDEVICEREMOVED:
+                    if (controller && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(controller)) == ev.cdevice.which) {
+                        SDL_GameControllerClose(controller);
+                        controller = nullptr;
+                        std::printf("Controller disconnected\n");
+                    }
+                    break;
                 case SDL_KEYDOWN:
                     if (ev.key.keysym.sym == SDLK_LSHIFT || ev.key.keysym.sym == SDLK_RSHIFT) {
                         shiftHeld = true;
                     }
 #ifndef __SWITCH__
                     if (ev.key.keysym.sym == SDLK_ESCAPE) {
+                        if (state.playMode) exitPlayMode();
+                        SDL_SetRelativeMouseMode(SDL_FALSE);
+                        break;
+                    }
+                    if ((ev.key.keysym.sym == SDLK_c) && (ev.key.keysym.mod & KMOD_CTRL)) {
                         running = false;
                         break;
                     }
@@ -790,7 +894,14 @@ int main(int argc, char** argv) {
                         state.wallMode = !state.wallMode;
                         state.entityMode = false;
                     }
-                    if (ev.key.keysym.sym == SDLK_c && ev.key.repeat == 0) {
+                    if (ev.key.keysym.sym == SDLK_4 && ev.key.repeat == 0) {
+                        if (state.playMode) exitPlayMode();
+                        state.entityMode = true;
+                        state.wallMode = false;
+                        state.entityBrush = EntityType::Door;
+                        std::printf("Entity brush: %s\n", entityTypeName(state.entityBrush));
+                    }
+                    if (ev.key.keysym.sym == SDLK_v && ev.key.repeat == 0) {
                         if (ev.key.keysym.mod & KMOD_SHIFT) {
                             const float sizes[] = {0.25f, 0.5f, 1.0f};
                             size_t idx = 0;
@@ -814,9 +925,24 @@ int main(int argc, char** argv) {
                             std::printf("Entity brush: %s\n", entityTypeName(state.entityBrush));
                         }
                     }
+                    if (ev.key.keysym.sym == SDLK_c && ev.key.repeat == 0) {
+                        if (!state.playMode) {
+                            selectPressed = true;
+                        }
+                    }
                     if (ev.key.keysym.sym == SDLK_x && ev.key.repeat == 0) {
                         if (!state.playMode) {
+                            placePressed = true;
+                        }
+                    }
+                    if (ev.key.keysym.sym == SDLK_e && ev.key.repeat == 0) {
+                        if (!state.playMode) {
                             deletePressed = true;
+                        }
+                    }
+                    if ((ev.key.keysym.sym == SDLK_y || ev.key.keysym.sym == SDLK_q) && ev.key.repeat == 0) {
+                        if (!state.playMode) {
+                            createSectorPressed = true;
                         }
                     }
 #endif
@@ -862,78 +988,6 @@ int main(int argc, char** argv) {
                     } else if (ev.button.button == SDL_BUTTON_RIGHT) {
                         if (state.playMode) {
                             mouseFire = true;
-                        } else {
-                            float wx, wy;
-                            worldFromMouse(ev.button.x, ev.button.y, winW, winH, camera, wx, wy);
-                            if (state.entityMode) {
-                                const float entityHoverRadius = 0.3f;
-                                float bestEDist2 = entityHoverRadius * entityHoverRadius;
-                                int deleteEntity = -1;
-                                for (size_t i = 0; i < state.entities.size(); ++i) {
-                                    float dx = wx - state.entities[i].x;
-                                    float dy = wy - state.entities[i].y;
-                                    float d2 = dx * dx + dy * dy;
-                                    if (d2 <= bestEDist2) {
-                                        bestEDist2 = d2;
-                                        deleteEntity = static_cast<int>(i);
-                                    }
-                                }
-                                if (deleteEntity != -1) {
-                                    state.entities.erase(state.entities.begin() + deleteEntity);
-                                    if (state.selectedEntity == deleteEntity) state.selectedEntity = -1;
-                                    else if (state.selectedEntity > deleteEntity) --state.selectedEntity;
-                                    needRebuild = true;
-                                }
-                            } else {
-                                int deleteVertex = findVertexAt(state, wx, wy);
-                                if (deleteVertex != -1) {
-                                    state.vertices.erase(state.vertices.begin() + deleteVertex);
-                                    for (auto& line : state.lines) {
-                                        if (line.v1 == deleteVertex || line.v2 == deleteVertex) {
-                                            line.v1 = -1;
-                                            line.v2 = -1;
-                                        } else {
-                                            if (line.v1 > deleteVertex) --line.v1;
-                                            if (line.v2 > deleteVertex) --line.v2;
-                                        }
-                                    }
-                                    state.lines.erase(std::remove_if(state.lines.begin(), state.lines.end(),
-                                                                     [](const LineDef& l){ return l.v1 < 0 || l.v2 < 0; }),
-                                                      state.lines.end());
-                                    if (state.selectedVertex == deleteVertex) {
-                                        state.selectedVertex = -1;
-                                        state.wallMode = false;
-                                    } else if (state.selectedVertex > deleteVertex) {
-                                        --state.selectedVertex;
-                                    }
-                                    needRebuild = true;
-                                } else {
-                                    int deleteLine = findLineAt(state, wx, wy);
-                                    if (deleteLine != -1) {
-                                        state.lines.erase(state.lines.begin() + deleteLine);
-                                        needRebuild = true;
-                                    } else {
-                                        const float entityHoverRadius = 0.3f;
-                                        float bestEDist2 = entityHoverRadius * entityHoverRadius;
-                                        int deleteEntity = -1;
-                                        for (size_t i = 0; i < state.entities.size(); ++i) {
-                                            float dx = wx - state.entities[i].x;
-                                            float dy = wy - state.entities[i].y;
-                                            float d2 = dx * dx + dy * dy;
-                                            if (d2 <= bestEDist2) {
-                                                bestEDist2 = d2;
-                                                deleteEntity = static_cast<int>(i);
-                                            }
-                                        }
-                                        if (deleteEntity != -1) {
-                                            state.entities.erase(state.entities.begin() + deleteEntity);
-                                            if (state.selectedEntity == deleteEntity) state.selectedEntity = -1;
-                                            else if (state.selectedEntity > deleteEntity) --state.selectedEntity;
-                                            needRebuild = true;
-                                        }
-                                    }
-                                }
-                            }
                         }
                     }
 #endif
@@ -987,6 +1041,19 @@ int main(int argc, char** argv) {
             if (state.playMode) exitPlayMode();
             else enterPlayMode();
         }
+
+#ifndef __SWITCH__
+        // Ensure mouse grab matches play/edit state on desktop
+        if (state.playMode) {
+            if (!SDL_GetRelativeMouseMode()) {
+                SDL_SetRelativeMouseMode(SDL_TRUE);
+            }
+        } else {
+            if (SDL_GetRelativeMouseMode()) {
+                SDL_SetRelativeMouseMode(SDL_FALSE);
+            }
+        }
+#endif
 
         if (!state.playMode && controller) {
             const int16_t deadZone = 8000;
@@ -1129,6 +1196,18 @@ int main(int argc, char** argv) {
                 newY += (forwardY * moveForward + rightY * moveStrafe) * moveSpeed * dt;
             }
 
+            // Update doors (auto-open and animate)
+            for (auto& d : state.doors) {
+                float dx = fpsCamera.x - d.x;
+                float dy = fpsCamera.y - d.y;
+                float dist = std::sqrt(dx * dx + dy * dy);
+                if (!d.locked && dist < 2.0f) d.opening = true;
+                if (d.opening && d.progress < 1.0f) {
+                    d.progress += dt * 1.5f;
+                    if (d.progress > 1.0f) d.progress = 1.0f;
+                }
+            }
+
             if (mouseFire) {
                 const float projSpeed = 6.0f;
                 spawnProjectile(state, fpsCamera.x, fpsCamera.y, fpsCamera.z,
@@ -1154,6 +1233,21 @@ int main(int argc, char** argv) {
                     dy /= len;
                     newX = nearest.x + dx * radius;
                     newY = nearest.y + dy * radius;
+                }
+            }
+
+            // Door collision when not fully open
+            for (const auto& d : state.doors) {
+                if (!d.active) continue;
+                if (d.progress >= 1.0f) continue;
+                float dx = newX - d.x;
+                float dy = newY - d.y;
+                float dist = std::sqrt(dx * dx + dy * dy);
+                float blockR = d.width * 0.6f + radius;
+                if (dist < blockR && dist > 0.0001f) {
+                    dx /= dist; dy /= dist;
+                    newX = d.x + dx * blockR;
+                    newY = d.y + dy * blockR;
                 }
             }
 
@@ -1414,9 +1508,46 @@ int main(int argc, char** argv) {
         }
         }
 
+        if (!state.playMode && state.wallMode && createSectorPressed) {
+            std::vector<std::vector<int>> loops = findClosedLoops(state);
+            std::vector<std::vector<int>> newLoops;
+            for (const auto& loop : loops) {
+                bool exists = false;
+                for (const auto& sec : state.sectors) {
+                    if (loopsEqual(loop, sec.vertices)) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists) {
+                    newLoops.push_back(loop);
+                }
+            }
+
+            if (!newLoops.empty()) {
+                loopHighlight = newLoops.front();
+                loopHighlightTimer = 0.5f;
+
+                for (const auto& loop : newLoops) {
+                    Sector s;
+                    s.vertices = loop;
+                    float area = 0.0f;
+                    for (size_t i = 0; i < loop.size(); ++i) {
+                        const auto& p0 = state.vertices[loop[i]];
+                        const auto& p1 = state.vertices[loop[(i + 1) % loop.size()]];
+                        area += p0.first * p1.second - p1.first * p0.second;
+                    }
+                    s.clockwise = (area < 0.0f);
+                    state.sectors.push_back(std::move(s));
+                }
+                rebuildWorldMesh(state, state.worldMesh);
+                needRebuild = false;
+            }
+        }
+
         if (!state.playMode) {
+            renderer.setCamera(camera);
             if (needRebuild) {
-                buildSectorsFromLinedefs(state);
                 rebuildWorldMesh(state, state.worldMesh);
                 needRebuild = false;
             }
@@ -1453,6 +1584,21 @@ int main(int argc, char** argv) {
                 renderer.drawLine2D(v1.first, v1.second, v2.first, v2.second, 1.0f, 1.0f, 1.0f);
             }
 
+            if (!loopHighlight.empty() && loopHighlightTimer > 0.0f) {
+                for (size_t i = 0; i < loopHighlight.size(); ++i) {
+                    int idxA = loopHighlight[i];
+                    int idxB = loopHighlight[(i + 1) % loopHighlight.size()];
+                    if (idxA < 0 || idxB < 0 ||
+                        idxA >= static_cast<int>(state.vertices.size()) ||
+                        idxB >= static_cast<int>(state.vertices.size())) {
+                        continue;
+                    }
+                    const auto& a = state.vertices[idxA];
+                    const auto& b = state.vertices[idxB];
+                    renderer.drawLine2D(a.first, a.second, b.first, b.second, 1.0f, 1.0f, 0.0f);
+                }
+            }
+
             for (const auto& vert : state.vertices) {
                 renderer.drawPoint2D(vert.first, vert.second, 0.12f, 0.0f, 1.0f, 1.0f);
             }
@@ -1468,7 +1614,8 @@ int main(int argc, char** argv) {
                 switch (e.type) {
                     case EntityType::PlayerStart: r = 0.1f; g = 0.8f; b = 0.1f; break;
                     case EntityType::EnemyWizard: r = 0.7f; g = 0.2f; b = 0.9f; break;
-                    case EntityType::ItemPickup:  r = 0.1f; g = 0.4f; b = 0.9f; break;
+                    case EntityType::ItemPickup:  r = 1.0f; g = 0.5f; b = 0.1f; break;
+                    case EntityType::Door:        r = 0.6f; g = 0.6f; b = 0.0f; break;
                 }
                 if (selected) { r = 1.0f; g = 0.5f; b = 0.0f; size *= 1.1f; }
                 else if (hovered) { r = 1.0f; g = 1.0f; b = 0.0f; size *= 1.05f; }
@@ -1489,6 +1636,13 @@ int main(int argc, char** argv) {
                         renderer.drawLine2D(e.x + size, e.y, e.x, e.y - size, r, g, b);
                         renderer.drawLine2D(e.x, e.y - size, e.x - size, e.y, r, g, b);
                         renderer.drawLine2D(e.x - size, e.y, e.x, e.y + size, r, g, b);
+                        break;
+                    }
+                    case EntityType::Door: {
+                        renderer.drawLine2D(e.x - size, e.y - size, e.x + size, e.y - size, r, g, b);
+                        renderer.drawLine2D(e.x + size, e.y - size, e.x + size, e.y + size, r, g, b);
+                        renderer.drawLine2D(e.x + size, e.y + size, e.x - size, e.y + size, r, g, b);
+                        renderer.drawLine2D(e.x - size, e.y + size, e.x - size, e.y - size, r, g, b);
                         break;
                     }
                 }
@@ -1524,6 +1678,7 @@ int main(int argc, char** argv) {
             renderer.drawLine2D(state.cursorX, state.cursorY - cursorSize,
                                 state.cursorX, state.cursorY + cursorSize,
                                 1.0f, 0.2f, 0.8f);
+            renderer.drawEditorHUD(state, winW, winH);
             renderer.endFrame(window);
         } else {
             renderer.drawMesh3D(state.worldMesh, fpsCamera);
@@ -1539,6 +1694,12 @@ int main(int argc, char** argv) {
                 renderer.drawBillboard3D(fpsCamera, e.x, e.y, e.z, 1.2f, texEnemySprite,
                                          1.0f, 1.0f, 1.0f);
             }
+            for (const auto& d : state.doors) {
+                if (!d.active) continue;
+                float z = d.progress * d.height;
+                renderer.drawBillboard3D(fpsCamera, d.x, d.y, z, 1.5f, texDoorSprite,
+                                         1.0f, 1.0f, 1.0f);
+            }
             for (const auto& it : state.items) {
                 if (!it.alive) continue;
                 GLuint tex = texItemMana;
@@ -1547,10 +1708,20 @@ int main(int argc, char** argv) {
             if (state.blockFlashTimer > 0.0f) {
                 renderer.drawBillboard3D(fpsCamera, fpsCamera.x, fpsCamera.y, fpsCamera.z + 0.2f, 1.3f, texBlockFlash, 1.0f, 1.0f, 1.0f);
             }
-            renderer.drawEditorHUD(state, winW, winH);
             renderer.endFrame(window);
         }
+    };
+
+#ifdef __EMSCRIPTEN__
+    emscripten_set_main_loop_arg([](void* arg) {
+        auto* fn = static_cast<decltype(frame)*>(arg);
+        (*fn)();
+    }, &frame, 0, 1);
+#else
+    while (running) {
+        frame();
     }
+#endif
 
     if (controller) {
         SDL_GameControllerClose(controller);

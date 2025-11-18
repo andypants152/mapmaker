@@ -2,15 +2,113 @@
 #include "RendererGL.h"
 #include "EditorState.h"
 #include "Mesh3D.h"
+#include "stb_image.h"
 #include <cmath>
 #include <cstdio>
 #include <vector>
 #include <array>
 #include <cctype>
 #include <cstring>
-#include <png.h>
-#include <sys/stat.h>
-#include <sys/types.h>
+
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h>
+#endif
+
+#if !defined(__SWITCH__) && !defined(__EMSCRIPTEN__)
+// Load core GL entry points dynamically (Windows opengl32 exports only 1.1)
+static PFNGLDELETEBUFFERSPROC       p_glDeleteBuffers       = nullptr;
+static PFNGLDELETEPROGRAMPROC       p_glDeleteProgram       = nullptr;
+static PFNGLUSEPROGRAMPROC          p_glUseProgram          = nullptr;
+static PFNGLUNIFORM4FPROC           p_glUniform4f           = nullptr;
+static PFNGLBINDBUFFERPROC          p_glBindBuffer          = nullptr;
+static PFNGLBUFFERDATAPROC          p_glBufferData          = nullptr;
+static PFNGLENABLEVERTEXATTRIBARRAYPROC p_glEnableVertexAttribArray = nullptr;
+static PFNGLVERTEXATTRIBPOINTERPROC p_glVertexAttribPointer = nullptr;
+static PFNGLDISABLEVERTEXATTRIBARRAYPROC p_glDisableVertexAttribArray = nullptr;
+static PFNGLUNIFORMMATRIX4FVPROC    p_glUniformMatrix4fv    = nullptr;
+static PFNGLUNIFORM1IPROC           p_glUniform1i           = nullptr;
+static PFNGLACTIVETEXTUREPROC       p_glActiveTexture       = nullptr;
+static PFNGLCREATESHADERPROC        p_glCreateShader        = nullptr;
+static PFNGLSHADERSOURCEPROC        p_glShaderSource        = nullptr;
+static PFNGLCOMPILESHADERPROC       p_glCompileShader       = nullptr;
+static PFNGLGETSHADERIVPROC         p_glGetShaderiv         = nullptr;
+static PFNGLGETSHADERINFOLOGPROC    p_glGetShaderInfoLog    = nullptr;
+static PFNGLDELETESHADERPROC        p_glDeleteShader        = nullptr;
+static PFNGLCREATEPROGRAMPROC       p_glCreateProgram       = nullptr;
+static PFNGLATTACHSHADERPROC        p_glAttachShader        = nullptr;
+static PFNGLLINKPROGRAMPROC         p_glLinkProgram         = nullptr;
+static PFNGLGETPROGRAMIVPROC        p_glGetProgramiv        = nullptr;
+static PFNGLGETPROGRAMINFOLOGPROC   p_glGetProgramInfoLog   = nullptr;
+static PFNGLGETATTRIBLOCATIONPROC   p_glGetAttribLocation   = nullptr;
+static PFNGLGETUNIFORMLOCATIONPROC  p_glGetUniformLocation  = nullptr;
+static PFNGLGENBUFFERSPROC          p_glGenBuffers          = nullptr;
+
+#define glDeleteBuffers p_glDeleteBuffers
+#define glDeleteProgram p_glDeleteProgram
+#define glUseProgram p_glUseProgram
+#define glUniform4f p_glUniform4f
+#define glBindBuffer p_glBindBuffer
+#define glBufferData p_glBufferData
+#define glEnableVertexAttribArray p_glEnableVertexAttribArray
+#define glVertexAttribPointer p_glVertexAttribPointer
+#define glDisableVertexAttribArray p_glDisableVertexAttribArray
+#define glUniformMatrix4fv p_glUniformMatrix4fv
+#define glUniform1i p_glUniform1i
+#define glActiveTexture p_glActiveTexture
+#define glCreateShader p_glCreateShader
+#define glShaderSource p_glShaderSource
+#define glCompileShader p_glCompileShader
+#define glGetShaderiv p_glGetShaderiv
+#define glGetShaderInfoLog p_glGetShaderInfoLog
+#define glDeleteShader p_glDeleteShader
+#define glCreateProgram p_glCreateProgram
+#define glAttachShader p_glAttachShader
+#define glLinkProgram p_glLinkProgram
+#define glGetProgramiv p_glGetProgramiv
+#define glGetProgramInfoLog p_glGetProgramInfoLog
+#define glGetAttribLocation p_glGetAttribLocation
+#define glGetUniformLocation p_glGetUniformLocation
+#define glGenBuffers p_glGenBuffers
+
+static bool loadGLFunctions() {
+    p_glDeleteBuffers        = reinterpret_cast<PFNGLDELETEBUFFERSPROC>(SDL_GL_GetProcAddress("glDeleteBuffers"));
+    p_glDeleteProgram        = reinterpret_cast<PFNGLDELETEPROGRAMPROC>(SDL_GL_GetProcAddress("glDeleteProgram"));
+    p_glUseProgram           = reinterpret_cast<PFNGLUSEPROGRAMPROC>(SDL_GL_GetProcAddress("glUseProgram"));
+    p_glUniform4f            = reinterpret_cast<PFNGLUNIFORM4FPROC>(SDL_GL_GetProcAddress("glUniform4f"));
+    p_glBindBuffer           = reinterpret_cast<PFNGLBINDBUFFERPROC>(SDL_GL_GetProcAddress("glBindBuffer"));
+    p_glBufferData           = reinterpret_cast<PFNGLBUFFERDATAPROC>(SDL_GL_GetProcAddress("glBufferData"));
+    p_glEnableVertexAttribArray = reinterpret_cast<PFNGLENABLEVERTEXATTRIBARRAYPROC>(SDL_GL_GetProcAddress("glEnableVertexAttribArray"));
+    p_glVertexAttribPointer  = reinterpret_cast<PFNGLVERTEXATTRIBPOINTERPROC>(SDL_GL_GetProcAddress("glVertexAttribPointer"));
+    p_glDisableVertexAttribArray = reinterpret_cast<PFNGLDISABLEVERTEXATTRIBARRAYPROC>(SDL_GL_GetProcAddress("glDisableVertexAttribArray"));
+    p_glUniformMatrix4fv     = reinterpret_cast<PFNGLUNIFORMMATRIX4FVPROC>(SDL_GL_GetProcAddress("glUniformMatrix4fv"));
+    p_glUniform1i            = reinterpret_cast<PFNGLUNIFORM1IPROC>(SDL_GL_GetProcAddress("glUniform1i"));
+    p_glActiveTexture        = reinterpret_cast<PFNGLACTIVETEXTUREPROC>(SDL_GL_GetProcAddress("glActiveTexture"));
+    p_glCreateShader         = reinterpret_cast<PFNGLCREATESHADERPROC>(SDL_GL_GetProcAddress("glCreateShader"));
+    p_glShaderSource         = reinterpret_cast<PFNGLSHADERSOURCEPROC>(SDL_GL_GetProcAddress("glShaderSource"));
+    p_glCompileShader        = reinterpret_cast<PFNGLCOMPILESHADERPROC>(SDL_GL_GetProcAddress("glCompileShader"));
+    p_glGetShaderiv          = reinterpret_cast<PFNGLGETSHADERIVPROC>(SDL_GL_GetProcAddress("glGetShaderiv"));
+    p_glGetShaderInfoLog     = reinterpret_cast<PFNGLGETSHADERINFOLOGPROC>(SDL_GL_GetProcAddress("glGetShaderInfoLog"));
+    p_glDeleteShader         = reinterpret_cast<PFNGLDELETESHADERPROC>(SDL_GL_GetProcAddress("glDeleteShader"));
+    p_glCreateProgram        = reinterpret_cast<PFNGLCREATEPROGRAMPROC>(SDL_GL_GetProcAddress("glCreateProgram"));
+    p_glAttachShader         = reinterpret_cast<PFNGLATTACHSHADERPROC>(SDL_GL_GetProcAddress("glAttachShader"));
+    p_glLinkProgram          = reinterpret_cast<PFNGLLINKPROGRAMPROC>(SDL_GL_GetProcAddress("glLinkProgram"));
+    p_glGetProgramiv         = reinterpret_cast<PFNGLGETPROGRAMIVPROC>(SDL_GL_GetProcAddress("glGetProgramiv"));
+    p_glGetProgramInfoLog    = reinterpret_cast<PFNGLGETPROGRAMINFOLOGPROC>(SDL_GL_GetProcAddress("glGetProgramInfoLog"));
+    p_glGetAttribLocation    = reinterpret_cast<PFNGLGETATTRIBLOCATIONPROC>(SDL_GL_GetProcAddress("glGetAttribLocation"));
+    p_glGetUniformLocation   = reinterpret_cast<PFNGLGETUNIFORMLOCATIONPROC>(SDL_GL_GetProcAddress("glGetUniformLocation"));
+    p_glGenBuffers           = reinterpret_cast<PFNGLGENBUFFERSPROC>(SDL_GL_GetProcAddress("glGenBuffers"));
+
+    return p_glDeleteBuffers && p_glDeleteProgram && p_glUseProgram && p_glUniform4f &&
+           p_glBindBuffer && p_glBufferData && p_glEnableVertexAttribArray && p_glVertexAttribPointer &&
+           p_glDisableVertexAttribArray && p_glUniformMatrix4fv && p_glUniform1i && p_glActiveTexture &&
+           p_glCreateShader && p_glShaderSource && p_glCompileShader && p_glGetShaderiv &&
+           p_glGetShaderInfoLog && p_glDeleteShader && p_glCreateProgram && p_glAttachShader &&
+           p_glLinkProgram && p_glGetProgramiv && p_glGetProgramInfoLog && p_glGetAttribLocation &&
+           p_glGetUniformLocation && p_glGenBuffers;
+}
+#else
+static bool loadGLFunctions() { return true; }
+#endif
 
 static bool getGlyph(char c, std::array<uint8_t, 5>& out) {
     switch (std::toupper(static_cast<unsigned char>(c))) {
@@ -41,11 +139,11 @@ static bool getGlyph(char c, std::array<uint8_t, 5>& out) {
         case 'Y': out = {0x03,0x04,0x78,0x04,0x03}; return true;
         case 'Z': out = {0x61,0x51,0x49,0x45,0x43}; return true;
         case '0': out = {0x3E,0x45,0x49,0x51,0x3E}; return true;
-        case '1': out = {0x00,0x21,0x7F,0x01,0x00}; return true;
-        case '2': out = {0x23,0x45,0x49,0x51,0x21}; return true;
+        case '1': out = {0x00,0x42,0x7F,0x40,0x00}; return true;
+        case '2': out = {0x62,0x51,0x49,0x45,0x42}; return true;
         case '3': out = {0x22,0x41,0x49,0x49,0x36}; return true;
-        case '4': out = {0x0C,0x14,0x24,0x7F,0x04}; return true;
-        case '5': out = {0x72,0x51,0x51,0x51,0x4E}; return true;
+        case '4': out = {0x1C,0x12,0x7F,0x10,0x10}; return true;
+        case '5': out = {0x27,0x45,0x45,0x45,0x39}; return true;
         case '6': out = {0x3E,0x49,0x49,0x49,0x32}; return true;
         case '7': out = {0x01,0x01,0x7D,0x03,0x01}; return true;
         case '8': out = {0x36,0x49,0x49,0x49,0x36}; return true;
@@ -71,6 +169,7 @@ static GLuint createFallbackTexture() {
     GLuint tex = 0;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -87,71 +186,56 @@ GLuint loadTextureFromPNG(const char* path) {
         return createFallbackTexture();
     }
 
-    png_structp png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
-    if (!png_ptr) {
+    if (fseek(fp, 0, SEEK_END) != 0) {
         fclose(fp);
-        std::printf("png_create_read_struct failed for %s (using fallback)\n", path);
-        return createFallbackTexture();
-    }
-    png_infop info_ptr = png_create_info_struct(png_ptr);
-    if (!info_ptr) {
-        png_destroy_read_struct(&png_ptr, nullptr, nullptr);
-        fclose(fp);
-        std::printf("png_create_info_struct failed for %s (using fallback)\n", path);
-        return createFallbackTexture();
-    }
-    if (setjmp(png_jmpbuf(png_ptr))) {
-        png_destroy_read_struct(&png_ptr, &info_ptr, nullptr);
-        fclose(fp);
-        std::printf("png read error for %s (using fallback)\n", path);
+        std::printf("Failed to seek texture: %s (using fallback)\n", path);
         return createFallbackTexture();
     }
 
-    png_init_io(png_ptr, fp);
-    png_read_info(png_ptr, info_ptr);
-
-    png_uint_32 width, height;
-    int bit_depth, color_type;
-    png_get_IHDR(png_ptr, info_ptr, &width, &height, &bit_depth, &color_type, nullptr, nullptr, nullptr);
-
-    if (color_type == PNG_COLOR_TYPE_PALETTE)
-        png_set_palette_to_rgb(png_ptr);
-    if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
-        png_set_expand_gray_1_2_4_to_8(png_ptr);
-    if (png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS))
-        png_set_tRNS_to_alpha(png_ptr);
-    if (bit_depth == 16)
-        png_set_strip_16(png_ptr);
-    if (color_type == PNG_COLOR_TYPE_RGB)
-        png_set_filler(png_ptr, 0xFF, PNG_FILLER_AFTER);
-    if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
-        png_set_gray_to_rgb(png_ptr);
-
-    png_read_update_info(png_ptr, info_ptr);
-
-    size_t rowbytes = png_get_rowbytes(png_ptr, info_ptr);
-    std::vector<png_byte> imageData(rowbytes * height);
-    std::vector<png_bytep> row_pointers(height);
-    for (png_uint_32 y = 0; y < height; ++y) {
-        row_pointers[y] = imageData.data() + y * rowbytes;
+    long len = ftell(fp);
+    if (len <= 0) {
+        fclose(fp);
+        std::printf("Failed to get size for texture: %s (using fallback)\n", path);
+        return createFallbackTexture();
     }
-    png_read_image(png_ptr, row_pointers.data());
-    png_read_end(png_ptr, nullptr);
 
-    png_destroy_read_struct(&png_ptr, &info_ptr, nullptr);
+    rewind(fp);
+    std::vector<unsigned char> fileData(static_cast<size_t>(len));
+    size_t readBytes = fread(fileData.data(), 1, static_cast<size_t>(len), fp);
     fclose(fp);
+    if (readBytes != static_cast<size_t>(len)) {
+        std::printf("Failed to read texture: %s (using fallback)\n", path);
+        return createFallbackTexture();
+    }
+
+    int width = 0;
+    int height = 0;
+    int comp = 0;
+    stbi_uc* pixels = stbi_load_from_memory(fileData.data(), static_cast<int>(fileData.size()), &width, &height, &comp, 4);
+    if (!pixels) {
+        std::printf("stbi_load_from_memory failed for %s (using fallback)\n", path);
+        return createFallbackTexture();
+    }
+
+    auto isPowerOfTwo = [](int n) { return (n & (n - 1)) == 0; };
+    bool pow2 = width > 0 && height > 0 && isPowerOfTwo(width) && isPowerOfTwo(height);
 
     GLuint tex = 0;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1); // handle NPOT widths cleanly across GL/WebGL
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, static_cast<GLsizei>(width), static_cast<GLsizei>(height), 0, GL_RGBA, GL_UNSIGNED_BYTE, imageData.data());
+    // WebGL forbids REPEAT on NPOT textures; clamp when not power-of-two.
+    GLint wrapMode = (pow2) ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapMode);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapMode);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, static_cast<GLsizei>(width), static_cast<GLsizei>(height), 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    std::printf("Loaded texture %s (%ux%u)\n", path, (unsigned)width, (unsigned)height);
+    stbi_image_free(pixels);
+
+    std::printf("Loaded texture %s (%dx%d)\n", path, width, height);
     return tex;
 }
 
@@ -189,6 +273,13 @@ bool RendererGL::init(SDL_Window* window) {
         std::printf("RendererGL::init called with null window\n");
         return false;
     }
+
+#if !defined(__SWITCH__) && !defined(__EMSCRIPTEN__)
+    if (!loadGLFunctions()) {
+        std::printf("Failed to load desktop GL functions\n");
+        return false;
+    }
+#endif
 
     if (!initGL())
         return false;
@@ -695,7 +786,8 @@ bool RendererGL::initGL() {
         "varying vec2 vUV;\n"
         "uniform sampler2D uTex;\n"
         "void main() {\n"
-        "    gl_FragColor = texture2D(uTex, vUV);\n"
+        "    vec2 uv = fract(vUV);\n"
+        "    gl_FragColor = texture2D(uTex, uv);\n"
         "}\n";
 
     m_program3D = createProgram(vsSrc3D, fsSrc3D);
@@ -829,18 +921,34 @@ void RendererGL::drawEditorHUD(const EditorState& state, int screenW, int screen
     if (screenW <= 0 || screenH <= 0)
         return;
 
-    const float border = 6.0f;
-    const float br = 0.0f, bg = 0.7f, bb = 1.0f, ba = 1.0f;
+    auto modeColor = [&](float& r, float& g, float& b) {
+        if (state.playMode) { r = 1.0f; g = 0.6f; b = 0.1f; return; }
+        if (state.entityMode) {
+            switch (state.entityBrush) {
+                case EntityType::PlayerStart: r = 0.1f; g = 0.8f; b = 0.1f; return;
+                case EntityType::EnemyWizard: r = 0.7f; g = 0.2f; b = 0.9f; return;
+                case EntityType::ItemPickup:  r = 1.0f; g = 0.5f; b = 0.1f; return;
+            }
+        }
+        if (state.wallMode) { r = 1.0f; g = 0.9f; b = 0.2f; return; }
+        r = 0.0f; g = 0.7f; b = 1.0f;
+    };
+
+    float br = 0.0f, bg = 0.7f, bb = 1.0f;
+    modeColor(br, bg, bb);
+
+    const float border = 10.0f;
+    const float ba = 1.0f;
     drawQuad2D(0.0f, 0.0f, static_cast<float>(screenW), border, br, bg, bb, ba, screenW, screenH);
     drawQuad2D(0.0f, static_cast<float>(screenH) - border, static_cast<float>(screenW), border, br, bg, bb, ba, screenW, screenH);
     drawQuad2D(0.0f, 0.0f, border, static_cast<float>(screenH), br, bg, bb, ba, screenW, screenH);
     drawQuad2D(static_cast<float>(screenW) - border, 0.0f, border, static_cast<float>(screenH), br, bg, bb, ba, screenW, screenH);
 
-    const float boxW = 260.0f;
-    const float boxH = 60.0f;
+    const float boxW = 980.0f;
+    const float boxH = 120.0f;
     const float boxX = 10.0f;
     const float boxY = static_cast<float>(screenH) - boxH - 10.0f;
-    drawQuad2D(boxX, boxY, boxW, boxH, 0.1f, 0.1f, 0.1f, 0.6f, screenW, screenH);
+    drawQuad2D(boxX, boxY, boxW, boxH, br, bg, bb, 0.6f, screenW, screenH);
 
     std::string mode;
     if (state.playMode) {
@@ -854,12 +962,6 @@ void RendererGL::drawEditorHUD(const EditorState& state, int screenW, int screen
     }
 
     char snapBuf[64];
-    if (state.snapEnabled) {
-        std::snprintf(snapBuf, sizeof(snapBuf), "SNAP: ON (%.2f)", state.snapSize);
-    } else {
-        std::snprintf(snapBuf, sizeof(snapBuf), "SNAP: OFF");
-    }
-
     char cursorBuf[96];
     std::snprintf(cursorBuf, sizeof(cursorBuf), "CURSOR: (X: %.2f, Y: %.2f)", state.cursorX, state.cursorY);
 
@@ -867,6 +969,25 @@ void RendererGL::drawEditorHUD(const EditorState& state, int screenW, int screen
     float textY = boxY + 12.0f;
     float scale = 2.0f;
     drawText2D(mode, textX, textY, scale, 1.0f, 1.0f, 1.0f, 1.0f, screenW, screenH);
-    drawText2D(snapBuf, textX, textY + 16.0f, scale, 1.0f, 1.0f, 1.0f, 1.0f, screenW, screenH);
-    drawText2D(cursorBuf, textX, textY + 32.0f, scale, 1.0f, 1.0f, 1.0f, 1.0f, screenW, screenH);
+    drawText2D(cursorBuf, textX, textY + 16.0f, scale, 1.0f, 1.0f, 1.0f, 1.0f, screenW, screenH);
+
+    // Quick reference controls for Switch (controller)
+    std::string controls1;
+    std::string controls2;
+    if (state.playMode) {
+        controls1 = "Play: Left Stick move  |  Right Stick look  |  L block";
+        controls2 = "Minus toggle playtest  |  Plus exit game";
+    } else if (state.entityMode) {
+        controls1 = "Entity (" + std::string(hudEntityName(state.entityBrush)) + "): A place  |  X delete  |  D-Pad Up cycle  |  D-Pad Down exit";
+        controls2 = "Left Stick move cursor  |  Right Stick pan view  |  L/R zoom  |  Minus playtest";
+    } else if (state.wallMode) {
+        controls1 = "Walls: B select/extend  |  A place vertex  |  X delete";
+        controls2 = "Left Stick move cursor  |  Right Stick pan view  |  L/R zoom  |  D-Pad Up entity mode  |  Minus playtest";
+    } else {
+        controls1 = "Vertices: A place/move  |  B select  |  X delete  |  D-Pad Up entity mode";
+        controls2 = "Left Stick move cursor  |  Right Stick pan view  |  L/R zoom  |  Minus playtest";
+    }
+
+    drawText2D(controls1, textX, textY + 32.0f, scale, 1.0f, 1.0f, 1.0f, 1.0f, screenW, screenH);
+    drawText2D(controls2, textX, textY + 48.0f, scale, 1.0f, 1.0f, 1.0f, 1.0f, screenW, screenH);
 }

@@ -2,5 +2,9 @@ build
 *.elf
 *.nacp
 *.nro
-mapmaker_desktop
+*.exe
+*.dll
+mapmaker
 data/
+node_modules/
+.emcache/

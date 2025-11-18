@@ -1,14 +1,26 @@
 // RendererGL.h
 #pragma once
 
+#if __has_include(<SDL2/SDL.h>)
 #include <SDL2/SDL.h>
+#elif __has_include(<SDL3/SDL.h>)
+#include <SDL3/SDL.h>
+#else
+#include <SDL.h>
+#endif
 #ifdef __SWITCH__
 #include <GLES2/gl2.h>
 #else
 #ifndef GL_GLEXT_PROTOTYPES
 #define GL_GLEXT_PROTOTYPES 1
 #endif
+#if __has_include(<SDL2/SDL_opengl.h>)
 #include <SDL2/SDL_opengl.h>
+#elif __has_include(<SDL3/SDL_opengl.h>)
+#include <SDL3/SDL_opengl.h>
+#else
+#include <SDL_opengl.h>
+#endif
 #endif
 #include <string>
 

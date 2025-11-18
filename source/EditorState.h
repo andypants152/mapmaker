@@ -13,6 +13,7 @@ struct LineDef {
 
 struct Sector {
     std::vector<int> vertices;
+    bool clockwise = false;
 };
 
 struct Camera3D {
@@ -28,13 +29,25 @@ struct Camera3D {
 enum class EntityType {
     PlayerStart,
     EnemyWizard,
-    ItemPickup
+    ItemPickup,
+    Door
 };
 
 struct Entity {
     float x = 0.0f;
     float y = 0.0f;
     EntityType type = EntityType::PlayerStart;
+};
+
+struct DoorState {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 2.0f;
+    float height = 3.0f;
+    float progress = 0.0f; // 0 = closed, 1 = fully open
+    bool opening = false;
+    bool locked = false;
+    bool active = true;
 };
 
 struct ItemWorld {
@@ -60,6 +73,7 @@ struct EditorState {
     std::vector<EnemyWizard> enemies;
     ProjectileSystem projectiles;
     std::vector<ItemWorld> items;
+    std::vector<DoorState> doors;
     int hoveredVertex = -1;
     int selectedVertex = -1;
     int hoveredEntity = -1;

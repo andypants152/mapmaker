@@ -20,10 +20,16 @@ Controller-driven mapmaker/playtest tool for a simple Doom-like prototype. Runs 
 - Minus/Back: toggle playtest mode; Plus/Start: quit.
 
 ## Building
-Desktop (SDL2 + OpenGL + GLAD + libpng + zlib):
+Desktop (SDL2 + OpenGL + GLAD):
 ```sh
 make desktop
 ./mapmaker_desktop
+```
+
+Windows (mingw-w64 cross-build from Linux; expects SDL2 dev files under /usr/x86_64-w64-mingw32 by default):
+```sh
+make windows WINDOWS_SDL2_DIR=/usr/x86_64-w64-mingw32
+./mapmaker.exe
 ```
 
 Nintendo Switch (devkitA64 + libnx, assets packed into the NRO):
@@ -31,5 +37,13 @@ Nintendo Switch (devkitA64 + libnx, assets packed into the NRO):
 export DEVKITPRO=<path to devkitpro>
 make switch
 ```
+
+WebAssembly (Emscripten + SDL2/WebGL2):
+```sh
+emcc -v   # ensure Emscripten is on PATH
+make wasm
+(cd web && npm install && npm start)
+```
+The WASM build drops `mapmaker.html/.js/.wasm/.data` into `web/public/` and the local Express server in `web/server.js` serves them at http://localhost:1234/mapmaker.html.
 
 Works best with a gamepad; there is no keyboard/mouse path wired up at the moment.
