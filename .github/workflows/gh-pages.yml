@@ -28,12 +28,11 @@ jobs:
 
       - name: Build WebAssembly target
         run: make wasm
-        working-directory: mapmaker
 
       - name: Upload static site
         uses: actions/upload-pages-artifact@v3
         with:
-          path: mapmaker/web/public
+          path: web/public
 
   deploy:
     needs: build
