@@ -115,6 +115,39 @@ struct Vec2 {
     float y;
 };
 
+#if !defined(__SWITCH__) && !defined(__EMSCRIPTEN__)
+static bool g_mouseCaptured = false;
+static bool g_windowFocused = true;
+
+static void setMouseCapture(SDL_Window* window, bool capture) {
+    bool want = capture && g_windowFocused;
+    if (g_mouseCaptured == want)
+        return;
+    g_mouseCaptured = want;
+#if SDL_VERSION_ATLEAST(3,0,0)
+    SDL_SetWindowRelativeMouseMode(window, want ? SDL_TRUE : SDL_FALSE);
+    SDL_SetWindowMouseGrab(window, want ? SDL_TRUE : SDL_FALSE);
+#else
+    SDL_SetRelativeMouseMode(want ? SDL_TRUE : SDL_FALSE);
+    SDL_SetWindowGrab(window, want ? SDL_TRUE : SDL_FALSE);
+#endif
+#if SDL_VERSION_ATLEAST(2,0,4)
+    SDL_CaptureMouse(want ? SDL_TRUE : SDL_FALSE);
+#endif
+    SDL_ShowCursor(want ? SDL_DISABLE : SDL_ENABLE);
+    if (want && SDL_GetRelativeMouseMode() == SDL_FALSE) {
+#if SDL_VERSION_ATLEAST(2,0,4)
+        // Some window managers (e.g., WSL X/Wayland) need warp-based relative mode.
+        SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_MODE_WARP, "1");
+        SDL_SetRelativeMouseMode(SDL_TRUE);
+#endif
+        int ww = 0, wh = 0;
+        SDL_GetWindowSize(window, &ww, &wh);
+        SDL_WarpMouseInWindow(window, ww / 2, wh / 2);
+    }
+}
+#endif
+
 static Vec2 closestPointOnSegment(float px, float py, float ax, float ay, float bx, float by) {
     float vx = bx - ax;
     float vy = by - ay;
@@ -658,6 +691,9 @@ int main(int argc, char** argv) {
     if (!controller) {
         std::printf("No SDL controller detected; keyboard/mouse controls active on desktop.\n");
     }
+#if !defined(__SWITCH__) && !defined(__EMSCRIPTEN__)
+    g_windowFocused = true;
+#endif
 
     EditorState state;
     buildDefaultMap(state);
@@ -730,7 +766,11 @@ int main(int argc, char** argv) {
         state.blocking = false;
         state.blockFlashTimer = 0.0f;
 #ifndef __SWITCH__
+    #ifdef __EMSCRIPTEN__
         SDL_SetRelativeMouseMode(SDL_TRUE);
+    #else
+        setMouseCapture(window, true);
+    #endif
 #endif
     };
 
@@ -745,7 +785,11 @@ int main(int argc, char** argv) {
         state.doors.clear();
         fpsCamera = Camera3D{};
 #ifndef __SWITCH__
+    #ifdef __EMSCRIPTEN__
         SDL_SetRelativeMouseMode(SDL_FALSE);
+    #else
+        setMouseCapture(window, false);
+    #endif
 #endif
     };
 
@@ -811,6 +855,17 @@ int main(int argc, char** argv) {
                         winH = ev.window.data2;
                         renderer.resize(ev.window.data1, ev.window.data2);
                     }
+#if !defined(__SWITCH__) && !defined(__EMSCRIPTEN__)
+                    else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+                        g_windowFocused = false;
+                        setMouseCapture(window, false);
+                    } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
+                        g_windowFocused = true;
+                        if (state.playMode) {
+                            setMouseCapture(window, true);
+                        }
+                    }
+#endif
                     break;
                 case SDL_CONTROLLERBUTTONDOWN:
                     // Quick exit on + button, for example
@@ -1044,6 +1099,7 @@ int main(int argc, char** argv) {
 
 #ifndef __SWITCH__
         // Ensure mouse grab matches play/edit state on desktop
+    #ifdef __EMSCRIPTEN__
         if (state.playMode) {
             if (!SDL_GetRelativeMouseMode()) {
                 SDL_SetRelativeMouseMode(SDL_TRUE);
@@ -1053,6 +1109,9 @@ int main(int argc, char** argv) {
                 SDL_SetRelativeMouseMode(SDL_FALSE);
             }
         }
+    #else
+        setMouseCapture(window, state.playMode);
+    #endif
 #endif
 
         if (!state.playMode && controller) {
@@ -1166,9 +1225,21 @@ int main(int argc, char** argv) {
 
             int relX = 0, relY = 0;
             SDL_GetRelativeMouseState(&relX, &relY);
-            const float mouseLookScale = 0.01f;
+            const float mouseLookScale =
+#if defined(__EMSCRIPTEN__)
+                0.01f;   // keep web consistent with pointer lock feel
+#else
+                0.015f;  // slightly faster look on desktop
+#endif
+#if defined(__EMSCRIPTEN__)
+            // Browser pointer lock already matches the expected desktop sign.
+            lookX += static_cast<float>(relX) * mouseLookScale;
+            lookY += static_cast<float>(relY) * mouseLookScale;
+#else
+            // Native desktop needed inversion after SDL coordinate handling changes.
             lookX -= static_cast<float>(relX) * mouseLookScale;
             lookY -= static_cast<float>(relY) * mouseLookScale;
+#endif
 
             bool blockKey = keys[SDL_SCANCODE_SPACE];
             state.blocking = controllerBlock || blockKey || mouseBlock;

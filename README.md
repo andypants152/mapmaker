@@ -23,12 +23,12 @@ Controller-driven mapmaker/playtest tool for a simple Doom-like prototype. Runs 
 Desktop/Linux (SDL2 + OpenGL + GLAD):
 ```sh
 make linux
-./mapmaker_desktop
+./mapmaker
 ```
 
 Windows (mingw-w64 cross-build from Linux; expects SDL2 dev files under /usr/x86_64-w64-mingw32 by default):
 ```sh
-make windows WINDOWS_SDL2_DIR=/usr/x86_64-w64-mingw32
+make windows
 ./mapmaker.exe
 ```
 
@@ -42,7 +42,7 @@ WebAssembly (Emscripten + SDL2/WebGL2):
 ```sh
 emcc -v   # ensure Emscripten is on PATH
 make wasm
-(cd web && npm install && npm start)
+(cd web && npm install && node server.js)
 ```
 The WASM build drops `mapmaker.html/.js/.wasm/.data` into `web/public/` and the local Express server in `web/server.js` serves them at http://localhost:1234/mapmaker.html.
 

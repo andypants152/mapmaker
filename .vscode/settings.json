@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "cstdio": "cpp",
+        "cmath": "cpp",
+        "map": "cpp",
+        "unordered_map": "cpp",
+        "string": "cpp",
+        "vector": "cpp"
+    }
+}
