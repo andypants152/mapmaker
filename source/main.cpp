@@ -884,7 +884,7 @@ int main(int argc, char** argv) {
                         if (state.playMode) {
                             exitPlayMode();
                         }
-#ifndef __SWITCH__
+#if !defined(__SWITCH__) && !defined(__EMSCRIPTEN__)
                         setMouseCapture(window, false);
 #endif
                     }
