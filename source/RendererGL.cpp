@@ -243,6 +243,7 @@ static GLuint createFallbackTexture() {
 }
 
 GLuint loadTextureFromPNG(const char* path) {
+    stbi_set_flip_vertically_on_load(1);
     std::vector<unsigned char> fileData;
     if (!PlatformReadFile(path, fileData) || fileData.empty()) {
         std::printf("Failed to read texture: %s (using fallback)\n", path);
