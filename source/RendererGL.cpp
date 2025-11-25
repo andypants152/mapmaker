@@ -16,6 +16,7 @@
 #include <limits>
 #include <cctype>
 #include <cstring>
+#include <cstdint>
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h>
@@ -116,6 +117,61 @@ static bool loadGLFunctions() {
 #else
 static bool loadGLFunctions() { return true; }
 #endif
+
+struct ClipVertex {
+    float x;
+    float y;
+};
+
+static bool earClip2D(const std::vector<ClipVertex>& poly, const std::vector<uint16_t>& localIdx, std::vector<uint16_t>& out) {
+    if (poly.size() < 3) return false;
+    float area = 0.0f;
+    for (size_t i = 0; i < poly.size(); ++i) {
+        const auto& a = poly[i];
+        const auto& b = poly[(i + 1) % poly.size()];
+        area += (a.x * b.y - b.x * a.y);
+    }
+    bool clockwise = area < 0.0f;
+
+    std::vector<uint16_t> idx = localIdx;
+    int guard = 0;
+    while (idx.size() >= 3 && guard < 1000) {
+        guard++;
+        bool clipped = false;
+        for (size_t i = 0; i < idx.size(); ++i) {
+            uint16_t i0 = idx[(i + idx.size() - 1) % idx.size()];
+            uint16_t i1 = idx[i];
+            uint16_t i2 = idx[(i + 1) % idx.size()];
+            const ClipVertex& a = poly[i0];
+            const ClipVertex& b = poly[i1];
+            const ClipVertex& c = poly[i2];
+            float cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+            if (clockwise ? cross > -1e-5f : cross < 1e-5f) continue;
+            bool ear = true;
+            for (uint16_t k : idx) {
+                if (k == i0 || k == i1 || k == i2) continue;
+                const ClipVertex& p = poly[k];
+                float w1 = ((a.x - p.x) * (b.y - a.y) - (a.y - p.y) * (b.x - a.x));
+                float w2 = ((b.x - p.x) * (c.y - b.y) - (b.y - p.y) * (c.x - b.x));
+                float w3 = ((c.x - p.x) * (a.y - c.y) - (c.y - p.y) * (a.x - c.x));
+                if (clockwise ? (w1 <= 0 && w2 <= 0 && w3 <= 0) : (w1 >= 0 && w2 >= 0 && w3 >= 0)) {
+                    ear = false;
+                    break;
+                }
+            }
+            if (ear) {
+                out.push_back(i0);
+                out.push_back(i1);
+                out.push_back(i2);
+                idx.erase(idx.begin() + i);
+                clipped = true;
+                break;
+            }
+        }
+        if (!clipped) return false;
+    }
+    return out.size() % 3 == 0;
+}
 
 static bool getGlyph(char c, std::array<uint8_t, 5>& out) {
     switch (std::toupper(static_cast<unsigned char>(c))) {
@@ -301,6 +357,7 @@ void RendererGL::resize(int width, int height) {
 
 void RendererGL::beginFrame() {
     glClearColor(0.05f, 0.05f, 0.1f, 1.0f);
+    glDisable(GL_DEPTH_TEST); // 2D editor rendering does not need depth
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
@@ -377,16 +434,42 @@ void RendererGL::drawSectorFill(const Sector& sector, const EditorState& state,
     if (sector.vertices.size() < 3)
         return;
 
-    std::vector<float> verts;
-    verts.reserve(sector.vertices.size() * 2);
+    std::vector<ClipVertex> poly;
+    poly.reserve(sector.vertices.size());
+    std::vector<uint16_t> localIdx;
+    localIdx.reserve(sector.vertices.size());
 
     for (int idx : sector.vertices) {
         if (idx < 0 || idx >= static_cast<int>(state.vertices.size()))
             return;
         const auto& v = state.vertices[idx];
-        verts.push_back(worldToClipX(v.first));
-        verts.push_back(worldToClipY(v.second));
+        poly.push_back({ worldToClipX(v.first), worldToClipY(v.second) });
+        localIdx.push_back(static_cast<uint16_t>(localIdx.size()));
     }
+
+    std::vector<uint16_t> triIdx;
+    bool triangulated = earClip2D(poly, localIdx, triIdx);
+
+    std::vector<float> verts;
+    GLenum primitive = GL_TRIANGLES;
+    if (triangulated && !triIdx.empty()) {
+        verts.reserve(triIdx.size() * 2);
+        for (uint16_t i : triIdx) {
+            const ClipVertex& p = poly[i];
+            verts.push_back(p.x);
+            verts.push_back(p.y);
+        }
+    } else {
+        primitive = GL_TRIANGLE_FAN;
+        verts.reserve(poly.size() * 2);
+        for (const auto& p : poly) {
+            verts.push_back(p.x);
+            verts.push_back(p.y);
+        }
+    }
+
+    if (verts.empty())
+        return;
 
     glUseProgram(m_program);
     glUniform4f(m_uniformColor, r, g, b, a);
@@ -397,24 +480,29 @@ void RendererGL::drawSectorFill(const Sector& sector, const EditorState& state,
     glEnableVertexAttribArray(m_attrPos);
     glVertexAttribPointer(m_attrPos, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (const void*)0);
 
-    glDrawArrays(GL_TRIANGLE_FAN, 0, static_cast<GLsizei>(sector.vertices.size()));
+    glDrawArrays(primitive, 0, static_cast<GLsizei>(verts.size() / 2));
 
     glDisableVertexAttribArray(m_attrPos);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 void RendererGL::drawBillboard3D(const Camera3D& cam, float x, float y, float z, float size, GLuint tex, float r, float g, float b) {
-    // Billboard uses camera yaw for right vector and world-up for up vector to stay upright.
+    // Billboard uses camera-facing basis (yaw + pitch) so it stays anchored when looking up/down.
+    glEnable(GL_DEPTH_TEST);
+
     const float cosYaw = std::cos(cam.yaw);
     const float sinYaw = std::sin(cam.yaw);
     const float cosPitch = std::cos(cam.pitch);
     const float sinPitch = std::sin(cam.pitch);
+    float forwardX = cosPitch * sinYaw;
+    float forwardY = cosPitch * cosYaw;
+    float forwardZ = sinPitch;
     float rightX = cosYaw;
     float rightY = -sinYaw;
     float rightZ = 0.0f;
-    float upX = 0.0f;
-    float upY = 0.0f;
-    float upZ = 1.0f;
+    float upX = -sinPitch * sinYaw;
+    float upY = -sinPitch * cosYaw;
+    float upZ = cosPitch;
 
     float hs = size * 0.5f;
     float positions[12] = {
@@ -443,10 +531,6 @@ void RendererGL::drawBillboard3D(const Camera3D& cam, float x, float y, float z,
         0, 0, (farPlane + nearPlane) / (nearPlane - farPlane), -1,
         0, 0, (2 * farPlane * nearPlane) / (nearPlane - farPlane), 0
     };
-
-    float forwardX = cosPitch * sinYaw;
-    float forwardY = cosPitch * cosYaw;
-    float forwardZ = sinPitch;
 
     float view[16] = {
         rightX, upX, -forwardX, 0,
@@ -588,7 +672,6 @@ void RendererGL::drawMesh3D(const Mesh3D& mesh, const Camera3D& cam) {
     glDisableVertexAttribArray(m_attrUV3D);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    glDisable(GL_DEPTH_TEST);
 }
 
 void RendererGL::drawGrid(const Camera2D& cam, float gridSize) {

@@ -231,24 +231,33 @@ static void buildDefaultMap(EditorState& state) {
     state.sectors.clear();
 
     const std::vector<std::pair<float, float>> verts = {
-        {0.0f, 0.0f},    // 0 bottom left
+      {0.0f, 0.0f},    // 0 bottom left
         {0.0f, 10.0f},   // 1 top left
         {10.0f, 10.0f},  // 2 top entry start
-        {10.0f, 7.0f},   // 3 vertical hall cutout (top)
-        {12.0f, 7.0f},   // 4 vertical hall cutout (top)
+        {10.0f, 6.0f},   // 3 vertical hall cutout (top)
+        {12.0f, 6.0f},   // 4 vertical hall cutout (top)
         {12.0f, 10.0f},  // 5 back to top edge
+        {22.0f, 10.0f},
+        {22.0f, 6.0f},   // 6 vertical hall cutout (top)
+        {24.0f, 6.0f},   // 7 vertical hall cutout (top)
+        {24.0f, 10.0f},  // 8 back to top edge
+        {34.0f, 10.0f},  // 10 slight rise near right end
+        {34.0f, 6.0f},
+        {36.0f, 6.0f},
         {36.0f, 11.0f},  // 6 slight rise toward right end
         {48.0f, 11.0f},  // 7 far top right
         {48.0f, -1.0f},  // 8 far bottom right
         {36.0f, -1.0f},  // 9 slight drop near right end
+        {36.0f, 4.0f},   // 10 angled return
+        {34.0f, 4.0f},   // 11 angled return
         {34.0f, 0.0f},   // 10 angled return
         {24.0f, 0.0f},   // 11 mid bottom
-        {24.0f, 3.0f},   // 12 bottom hall cutout top
-        {22.0f, 3.0f},   // 13 bottom hall cutout top (left)
+        {24.0f, 4.0f},   // 12 bottom hall cutout top
+        {22.0f, 4.0f},   // 13 bottom hall cutout top (left)
         {22.0f, 0.0f},   // 14 return down
         {12.0f, 0.0f},   // 15 bottom near entry
-        {12.0f, 3.0f},   // 16 bottom hall cutout top (right)
-        {10.0f, 3.0f},   // 17 bottom hall cutout top (left)
+        {12.0f, 4.0f},   // 16 bottom hall cutout top (right)
+        {10.0f, 4.0f},   // 17 bottom hall cutout top (left)
         {10.0f, 0.0f},   // 18 close to origin along bottom
     };
 
@@ -386,7 +395,15 @@ static void rebuildWorldMesh(const EditorState& state, Mesh3D& mesh,
 
         std::vector<uint16_t> triFloor;
         if (!earClip(poly2d, floorLocal, triFloor)) {
-            // fallback skip
+            // Fallback to a simple fan to avoid missing geometry on tricky polygons.
+            triFloor.clear();
+            if (floorLocal.size() >= 3) {
+                for (size_t i = 1; i + 1 < floorLocal.size(); ++i) {
+                    triFloor.push_back(floorLocal[0]);
+                    triFloor.push_back(floorLocal[i]);
+                    triFloor.push_back(floorLocal[i + 1]);
+                }
+            }
         }
         size_t floorStart = mesh.indices.size();
         for (uint16_t t : triFloor) mesh.indices.push_back(t);
@@ -398,7 +415,15 @@ static void rebuildWorldMesh(const EditorState& state, Mesh3D& mesh,
 
         std::vector<uint16_t> triCeil;
         if (!earClip(poly2d, ceilLocal, triCeil)) {
-            // fallback skip
+            // Fallback to a simple fan to avoid missing geometry on tricky polygons.
+            triCeil.clear();
+            if (ceilLocal.size() >= 3) {
+                for (size_t i = 1; i + 1 < ceilLocal.size(); ++i) {
+                    triCeil.push_back(ceilLocal[0]);
+                    triCeil.push_back(ceilLocal[i]);
+                    triCeil.push_back(ceilLocal[i + 1]);
+                }
+            }
         }
         size_t ceilStart = mesh.indices.size();
         // reverse winding for ceiling
@@ -619,7 +644,7 @@ int main(int argc, char** argv) {
     SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE,  8);
     SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24); // depth buffer for 3D occlusion (billboards, walls)
 
     int winW = 1280;
     int winH = 720;
@@ -854,6 +879,14 @@ int main(int argc, char** argv) {
                         winW = ev.window.data1;
                         winH = ev.window.data2;
                         renderer.resize(ev.window.data1, ev.window.data2);
+                    } else if (ev.window.event == SDL_WINDOWEVENT_CLOSE) {
+                        running = false;
+                        if (state.playMode) {
+                            exitPlayMode();
+                        }
+#ifndef __SWITCH__
+                        setMouseCapture(window, false);
+#endif
                     }
 #if !defined(__SWITCH__) && !defined(__EMSCRIPTEN__)
                     else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
@@ -1222,6 +1255,8 @@ int main(int argc, char** argv) {
             if (keys[SDL_SCANCODE_D]) moveX += 1.0f;
             if (keys[SDL_SCANCODE_W]) moveY -= 1.0f;
             if (keys[SDL_SCANCODE_S]) moveY += 1.0f;
+            if (keys[SDL_SCANCODE_Q]) lookX -= 1.0f; // turn left
+            if (keys[SDL_SCANCODE_E]) lookX += 1.0f; // turn right
 
             int relX = 0, relY = 0;
             SDL_GetRelativeMouseState(&relX, &relY);
@@ -1384,6 +1419,22 @@ int main(int argc, char** argv) {
                         } else {
                             p.alive = false;
                         }
+                        break;
+                    }
+                }
+
+                if (!p.alive) continue;
+
+                // door collision (block until nearly open)
+                for (const auto& d : state.doors) {
+                    if (!d.active) continue;
+                    if (d.progress >= 0.9f) continue;
+                    float dx = p.x - d.x;
+                    float dy = p.y - d.y;
+                    float dist = std::sqrt(dx * dx + dy * dy);
+                    float blockR = d.width * 0.6f + projectileRadius;
+                    if (dist < blockR) {
+                        p.alive = false;
                         break;
                     }
                 }
@@ -1767,8 +1818,9 @@ int main(int argc, char** argv) {
             }
             for (const auto& d : state.doors) {
                 if (!d.active) continue;
-                float z = d.progress * d.height;
-                renderer.drawBillboard3D(fpsCamera, d.x, d.y, z, 1.5f, texDoorSprite,
+                constexpr float doorSpriteSize = 1.5f;
+                float z = (doorSpriteSize * 0.5f) + d.progress * d.height; // keep sprite base at floor
+                renderer.drawBillboard3D(fpsCamera, d.x, d.y, z, doorSpriteSize, texDoorSprite,
                                          1.0f, 1.0f, 1.0f);
             }
             for (const auto& it : state.items) {
