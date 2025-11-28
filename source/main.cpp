@@ -1260,20 +1260,17 @@ int main(int argc, char** argv) {
 
             int relX = 0, relY = 0;
             SDL_GetRelativeMouseState(&relX, &relY);
-            const float mouseLookScale =
+            const float mouseSensitivity = 0.0025f; // radians per pixel
+            float mouseYawDelta = 0.0f;
+            float mousePitchDelta = 0.0f;
 #if defined(__EMSCRIPTEN__)
-                0.01f;   // keep web consistent with pointer lock feel
+            // Browser pointer lock already matches expected desktop sign.
+            mouseYawDelta   += static_cast<float>(relX) * mouseSensitivity;
+            mousePitchDelta -= static_cast<float>(relY) * mouseSensitivity;
 #else
-                0.015f;  // slightly faster look on desktop
-#endif
-#if defined(__EMSCRIPTEN__)
-            // Browser pointer lock already matches the expected desktop sign.
-            lookX += static_cast<float>(relX) * mouseLookScale;
-            lookY += static_cast<float>(relY) * mouseLookScale;
-#else
-            // Native desktop needed inversion after SDL coordinate handling changes.
-            lookX -= static_cast<float>(relX) * mouseLookScale;
-            lookY -= static_cast<float>(relY) * mouseLookScale;
+            // Native desktop needs inverted X/Y after SDL coordinate handling changes.
+            mouseYawDelta   -= static_cast<float>(relX) * mouseSensitivity;
+            mousePitchDelta += static_cast<float>(relY) * mouseSensitivity;
 #endif
 
             bool blockKey = keys[SDL_SCANCODE_SPACE];
@@ -1282,8 +1279,9 @@ int main(int argc, char** argv) {
             const float moveSpeed = 5.0f;
             const float lookSpeed = 2.5f;
 
-            fpsCamera.yaw += lookX * lookSpeed * dt;
-            fpsCamera.pitch -= lookY * lookSpeed * dt;
+            // Controller/QE look is frame-rate independent; mouse deltas apply directly.
+            fpsCamera.yaw   += (lookX * lookSpeed * dt) + mouseYawDelta;
+            fpsCamera.pitch -= (lookY * lookSpeed * dt) + mousePitchDelta;
             if (fpsCamera.pitch > 1.2f) fpsCamera.pitch = 1.2f;
             if (fpsCamera.pitch < -1.2f) fpsCamera.pitch = -1.2f;
 
