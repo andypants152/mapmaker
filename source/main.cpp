@@ -272,9 +272,9 @@ static void buildDefaultMap(EditorState& state) {
     }
     // Entities
     state.entities.push_back({5.0f, 5.0f, EntityType::PlayerStart});
-    state.entities.push_back({17.0f, 5.5f, EntityType::EnemyWizard});
+    state.entities.push_back({17.0f, 5.0f, EntityType::EnemyWizard});
     state.entities.push_back({29.0f, 5.0f, EntityType::ItemPickup});
-    state.entities.push_back({39.0f, 5.5f, EntityType::EnemyWizard});
+    state.entities.push_back({39.0f, 5.0f, EntityType::EnemyWizard});
     state.entities.push_back({43.0f, 3.0f, EntityType::EnemyWizard});
     state.entities.push_back({43.0f, 7.0f, EntityType::EnemyWizard});
     // Doors at corridor midpoints
@@ -737,11 +737,11 @@ int main(int argc, char** argv) {
     GLuint texEnemySprite = loadTextureFromPNG((dataPath + "enemy_wizard.png").c_str());
     GLuint texProjSprite = loadTextureFromPNG((dataPath + "projectile_orb.png").c_str());
     GLuint texItemHealth = loadTextureFromPNG((dataPath + "item_health.png").c_str());
-    GLuint texItemMana   = loadTextureFromPNG((dataPath + "item_mana.png").c_str());
     GLuint texBlockFlash = loadTextureFromPNG((dataPath + "block_flash.png").c_str());
     GLuint texDoorSprite = loadTextureFromPNG((dataPath + "metal_door.png").c_str());
     renderer.setBillboardTextures(texEnemySprite, texProjSprite);
-    renderer.setItemTextures(texItemHealth, texItemMana);
+    // Use the health pickup art for both until the mana asset is fixed.
+    renderer.setItemTextures(texItemHealth, texItemHealth);
     renderer.setEffectTextures(texBlockFlash);
 
     auto enterPlayMode = [&]() {
@@ -1455,7 +1455,7 @@ int main(int argc, char** argv) {
                         float push = (projectileRadius + fpsCamera.radius) - dp;
                         p.x += nx * push;
                         p.y += ny * push;
-                        state.blockFlashTimer = 0.15f;
+                        state.blockFlashTimer = 0.25f;
                     } else {
                         std::printf("Player hit! Returning to editor.\n");
                         state.playMode = false;
@@ -1823,11 +1823,22 @@ int main(int argc, char** argv) {
             }
             for (const auto& it : state.items) {
                 if (!it.alive) continue;
-                GLuint tex = texItemMana;
-                renderer.drawBillboard3D(fpsCamera, it.x, it.y, it.z, 0.6f, tex, 1.0f, 1.0f, 1.0f);
+                renderer.drawBillboard3D(fpsCamera, it.x, it.y, it.z, 0.6f, texItemHealth, 1.0f, 1.0f, 1.0f);
             }
             if (state.blockFlashTimer > 0.0f) {
-                renderer.drawBillboard3D(fpsCamera, fpsCamera.x, fpsCamera.y, fpsCamera.z + 0.2f, 1.3f, texBlockFlash, 1.0f, 1.0f, 1.0f);
+                // Push the flash slightly in front of the camera so it can't clip in the near plane.
+                const float cosYaw = std::cos(fpsCamera.yaw);
+                const float sinYaw = std::sin(fpsCamera.yaw);
+                const float cosPitch = std::cos(fpsCamera.pitch);
+                const float sinPitch = std::sin(fpsCamera.pitch);
+                const float forwardX = cosPitch * sinYaw;
+                const float forwardY = cosPitch * cosYaw;
+                const float forwardZ = sinPitch;
+                const float flashDist = 0.6f;
+                const float flashX = fpsCamera.x + forwardX * flashDist;
+                const float flashY = fpsCamera.y + forwardY * flashDist;
+                const float flashZ = fpsCamera.z + forwardZ * flashDist + 0.25f;
+                renderer.drawBillboard3D(fpsCamera, flashX, flashY, flashZ, 1.8f, texBlockFlash, 1.0f, 1.0f, 1.0f);
             }
             renderer.endFrame(window);
         }

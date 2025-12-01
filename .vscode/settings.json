@@ -9,6 +9,10 @@
         "array": "cpp",
         "cstring": "cpp",
         "fstream": "cpp",
-        "cstdint": "cpp"
+        "cstdint": "cpp",
+        "set": "cpp",
+        "unordered_set": "cpp",
+        "utility": "cpp",
+        "cctype": "cpp"
     }
 }
